@@ -8,6 +8,7 @@ export interface ServerResponse {
 
 export enum WSMessageType {
   INIT = 'INIT',
+  CLOSE = 'CLOSE',
   START_TEST = 'START_TEST',
   STOP_TEST = 'STOP_TEST',
   GET_STATUS = 'GET_STATUS',
@@ -47,7 +48,8 @@ export type PluginMessage =
   | { type: 'explore'; taskDesc: string; personaDesc?: string }
   | { type: 'stop-exploration' }
   | { type: 'exploration-status' }
-  | { type: 'reset' };
+  | { type: 'reset' }
+  | { type: 'error'; message: string };
 
 export interface ParsedReport {
     title: string;

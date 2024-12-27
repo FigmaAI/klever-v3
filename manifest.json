@@ -11,6 +11,5 @@
     "reasoning": "Required for WebSocket communication with KleverDesktop app",
     "devAllowedDomains": ["ws://localhost:8080"]
   },
-  "permissions": ["currentuser"],
-  "capabilities": ["inspect"]
+  "permissions": ["currentuser"]
 }

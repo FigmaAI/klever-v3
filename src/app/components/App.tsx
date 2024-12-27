@@ -31,13 +31,12 @@ import {
   AutoAwesome,
   FaceRetouchingNatural,
 } from '@mui/icons-material';
-import { ServerResponse } from '../../typings/types';
+import { WSMessageType, ServerResponse } from '../../typings/types';
 import { Player } from '@lottiefiles/react-lottie-player';
 import Animation from '../assets/Animation.json';
 
 const App = () => {
   const [activeStep, setActiveStep] = React.useState(0);
-  const [isStopping, setIsStopping] = React.useState(false);
   const [data, setData] = React.useState<ServerResponse | null>(null);
   const [url, setUrl] = React.useState('');
   const [password, setPassword] = React.useState('');
@@ -46,30 +45,82 @@ const App = () => {
   const [personaModalOpen, setPersonaModalOpen] = React.useState(false);
 
   const [isLoading, setIsLoading] = React.useState(false);
-  const [error, setError] = React.useState('');
   const [openModal, setOpenModal] = React.useState(false);
 
   const handleInit = () => {
     setIsLoading(true);
-    setError('');
-    parent.postMessage({ pluginMessage: { type: 'init', url, password } }, '*');
+    
+    const socket = new WebSocket('ws://localhost:8080');
+    socket.onopen = () => {
+        const initMessage = {
+            type: WSMessageType.INIT,
+            payload: { url, password: password || undefined }
+        };
+        socket.send(JSON.stringify(initMessage));
+    };
+
+    socket.onmessage = (event) => {
+        const response = JSON.parse(event.data);
+        console.log('Server response:', response);
+        
+        if (response.status === 'success') {
+            setActiveStep(1);
+            setIsLoading(false);
+        } else {
+            console.error('Server error:', response);
+            parent.postMessage({
+                pluginMessage: { type: 'error', message: response.payload.message }
+            }, '*');
+            setIsLoading(false);
+        }
+    };
+
+    socket.onerror = (error: Event) => {
+        console.error('WebSocket error:', error);
+        parent.postMessage({
+            pluginMessage: { type: 'error', message: 'WebSocket connection failed' }
+        }, '*');
+        setIsLoading(false);
+    };
   };
 
-  const handleExplore = (e) => {
+  const handleExplore = (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setError('');
 
-    parent.postMessage({ pluginMessage: { type: 'explore', taskDesc, personaDesc } }, '*');
+    try {
+        parent.postMessage({ 
+            pluginMessage: { type: 'explore', taskDesc, personaDesc }
+        }, '*');
+    } catch (error) {
+        console.error('Exploration error:', error);
+        parent.postMessage({
+            pluginMessage: { type: 'error', message: 'Failed to start exploration' }
+        }, '*');
+        setIsLoading(false);
+    }
   };
 
   const handleStop = () => {
-    setIsStopping(true);
-    parent.postMessage({ pluginMessage: { type: 'stop-exploration' } }, '*');
+    try {
+        parent.postMessage({ pluginMessage: { type: 'stop-exploration' } }, '*');
+    } catch (error) {
+        console.error('Stop exploration error:', error);
+        parent.postMessage({
+            pluginMessage: { type: 'error', message: 'Failed to stop exploration' }
+        }, '*');
+    }
   };
 
   const handleStatus = () => {
-    parent.postMessage({ pluginMessage: { type: 'exploration-status' } }, '*');
+    try {
+        parent.postMessage({ pluginMessage: { type: 'exploration-status' } }, '*');
+    } catch (error) {
+        console.error('Status check error:', error);
+        parent.postMessage({
+            pluginMessage: { type: 'error', message: 'Failed to check status' }
+        }, '*');
+    }
   };
 
   const handleBack = () => {
@@ -77,15 +128,49 @@ const App = () => {
   };
 
   const handleConfirmBack = () => {
-    handleStop();
-    setOpenModal(false);
-    setActiveStep(0);
-    setUrl('');
-    setPassword('');
-    setTaskDesc('');
-    setPersonaDesc('');
-    setData(null);
-    setError('');
+    try {
+        const socket = new WebSocket('ws://localhost:8080');
+        socket.onopen = () => {
+            const closeMessage = {
+                type: WSMessageType.CLOSE,
+                payload: { message: "Close browser session" }
+            };
+            socket.send(JSON.stringify(closeMessage));
+        };
+
+        socket.onmessage = (event) => {
+            const response = JSON.parse(event.data);
+            console.log('Close response:', response);
+            
+            if (response.status !== 'success') {
+                console.error('Close session error:', response);
+                parent.postMessage({
+                    pluginMessage: { type: 'error', message: response.payload.message }
+                }, '*');
+            }
+        };
+
+        socket.onerror = (error: Event) => {
+            console.error('Close session WebSocket error:', error);
+            parent.postMessage({
+                pluginMessage: { type: 'error', message: 'Failed to close browser session' }
+            }, '*');
+        };
+
+        handleStop();
+        setOpenModal(false);
+        setActiveStep(0);
+        setUrl('');
+        setPassword('');
+        setTaskDesc('');
+        setPersonaDesc('');
+        setData(null);
+    } catch (error) {
+        console.error('Reset error:', error);
+        parent.postMessage({
+            pluginMessage: { type: 'error', message: 'Failed to reset application state' }
+        }, '*');
+    }
   };
 
   const handleKeyDown = async (e) => {
@@ -94,37 +179,78 @@ const App = () => {
     }
   };
 
+  // const sendTestMessage = () => {
+  //   const socket = new WebSocket('ws://localhost:8080');
+  //   socket.onopen = () => {
+  //     const testMessage = {
+  //       type: WSMessageType.INIT,
+  //       payload: {
+  //         message: "Hello from Figma Plugin!"
+  //       }
+  //     };
+  //     socket.send(JSON.stringify(testMessage));
+  //     console.log('Test message sent');
+  //   };
+
+  //   socket.onmessage = (event) => {
+  //     console.log('Received response:', event.data);
+  //   };
+  // };
+
+  // WebSocket global message handler
   React.useEffect(() => {
-    window.onmessage = (event) => {
-      const message = event.data.pluginMessage;
-      setIsLoading(false);
+    const socket = new WebSocket('ws://localhost:8080');
 
-      switch (message.type) {
-        case 'SCREENSHOT':
-          setData({
-            status: 'success',
-            message: 'Screenshot received',
-            ...message.payload
-          });
-          break;
-        case 'STATUS':
-          setData({
-            status: message.payload.status,
-            message: message.payload.message
-          });
-          break;
-        case 'ERROR':
-          setError(message.payload.message || 'An error occurred');
-          break;
-        default:
-          if (message.data?.status === 'success' && !isStopping) {
-            setActiveStep((prevStep) => prevStep + 1);
-          }
-      }
-
-      setIsStopping(false);
+    socket.onopen = () => {
+        console.log('Connected to WebSocket server');
+        setIsLoading(false);
     };
-  }, [isStopping]);
+
+    socket.onmessage = (event) => {
+        try {
+            const message = JSON.parse(event.data);
+            console.log('WebSocket message:', message);
+            
+            switch (message.type) {
+                case WSMessageType.SCREENSHOT:
+                    setData(message.payload);
+                    break;
+                case WSMessageType.STATUS_UPDATE:
+                    setIsLoading(false);
+                    break;
+                case WSMessageType.ERROR:
+                    console.error('Server error:', message);
+                    parent.postMessage({
+                        pluginMessage: { type: 'error', message: message.payload.message }
+                    }, '*');
+                    setIsLoading(false);
+                    break;
+            }
+        } catch (error) {
+            console.error('Message parsing error:', error);
+            parent.postMessage({
+                pluginMessage: { type: 'error', message: 'Failed to process server message' }
+            }, '*');
+        }
+    };
+
+    socket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        parent.postMessage({
+            pluginMessage: { type: 'error', message: 'WebSocket connection error' }
+        }, '*');
+        setIsLoading(false);
+    };
+
+    socket.onclose = () => {
+        console.log('WebSocket connection closed');
+        setIsLoading(false);
+    };
+
+    return () => {
+        socket.close();
+    };
+  }, []);
 
   React.useEffect(() => {
     console.log('Active step changed:', activeStep);
@@ -168,7 +294,7 @@ const App = () => {
               {activeStep === 0 && (
                 <>
                   <CardContent>
-                    <FormControl error={!!error}>
+                    <FormControl>
                       <FormLabel>Figma Prototype URL</FormLabel>
                       <Input
                         value={url}
@@ -176,7 +302,6 @@ const App = () => {
                         placeholder="Enter the Figma Prototype URL"
                         disabled={isLoading}
                       />
-                      {error ? <Typography color="danger">{error}</Typography> : null}
                     </FormControl>
                     <br />
                     <FormControl>
@@ -326,16 +451,7 @@ const App = () => {
               {activeStep === 2 && (
                 <>
                   <CardContent>
-                    {error ? (
-                      <Textarea
-                        value={error}
-                        readOnly
-                        minRows={4}
-                        maxRows={8}
-                        size="md"
-                        sx={{ minWidth: 480, minHeight: 240 }}
-                      />
-                    ) : data ? (
+                    {data ? (
                       <>
                         <Player autoplay loop src={Animation} style={{ height: '160px', width: '160px' }} />
                         <Typography
