@@ -1,8 +1,8 @@
 {
-  "name": "figma-plugin-react-template",
+  "name": "klever-figma-plugin",
   "version": "1.0.0",
-  "description": "This plugin template uses Typescript. If you are familiar with Javascript, Typescript will look very familiar. In fact, valid Javascript code is already valid Typescript code.",
-  "license": "ISC",
+  "description": "Figma plugin for KleverDesktop - Browser automation and testing tool",
+  "license": "MIT",
   "scripts": {
     "build": "webpack --mode=production",
     "build:watch": "webpack --mode=development --watch",

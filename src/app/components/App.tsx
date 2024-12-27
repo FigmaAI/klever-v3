@@ -96,20 +96,30 @@ const App = () => {
 
   React.useEffect(() => {
     window.onmessage = (event) => {
-      const { type, data } = event.data.pluginMessage;
+      const message = event.data.pluginMessage;
       setIsLoading(false);
 
-      if (type === 'response') {
-        if (data.status === 'success') {
-          setData(data);
-          if (!isStopping) {
+      switch (message.type) {
+        case 'SCREENSHOT':
+          setData({
+            status: 'success',
+            message: 'Screenshot received',
+            ...message.payload
+          });
+          break;
+        case 'STATUS':
+          setData({
+            status: message.payload.status,
+            message: message.payload.message
+          });
+          break;
+        case 'ERROR':
+          setError(message.payload.message || 'An error occurred');
+          break;
+        default:
+          if (message.data?.status === 'success' && !isStopping) {
             setActiveStep((prevStep) => prevStep + 1);
           }
-        } else if (data.status === 'in_progress' || data.status === 'idle') {
-          setData(data);
-        } else {
-          setError(data.message || 'An error occurred');
-        }
       }
 
       setIsStopping(false);
@@ -345,7 +355,7 @@ const App = () => {
                         </Typography>
                       </>
                     )}
-                    <br/>
+                    <br />
                     <Button color="neutral" variant="outlined" onClick={handleStatus} sx={{ margin: 'auto', borderRadius: '16px' }}>
                       Check Status
                     </Button>
