@@ -1,63 +1,46 @@
-import { WSMessageType, TestConfig } from '../typings/types';
-
 export class WebSocketClient {
-    private testConfig: Partial<TestConfig> = {};
+    private static instance: WebSocketClient;
+    private listeners: ((response: any) => void)[] = [];
 
-    constructor() {
-        this.init();
-    }
-
-    private init() {
-        // 초기화 메시지 전송
-        figma.ui.postMessage({
-            type: WSMessageType.INIT,
-            payload: { status: 'connected' }
-        });
-    }
-
-    // Step 1: URL 설정
-    public setInitialConfig(url: string, password?: string) {
-        this.testConfig = { url, password };
-        figma.ui.postMessage({
-            type: 'config-set',
-            payload: this.testConfig
-        });
-    }
-
-    // Step 2: 테스트 시작
-    public startTest(taskDesc: string, personaDesc?: string) {
-        if (!this.testConfig.url) {
-            throw new Error('URL is not set. Please complete Step 1 first.');
-        }
-
-        const config: TestConfig = {
-            ...this.testConfig as TestConfig,
-            taskDesc,
-            personaDesc
+    private constructor() {
+        // UI와의 메시지 통신 설정
+        figma.ui.onmessage = (event) => {
+            if (event.type === 'websocket-message') {
+                const response = event.data;
+                this.listeners.forEach(listener => listener(response));
+            }
         };
+    }
 
+    public static getInstance(): WebSocketClient {
+        if (!WebSocketClient.instance) {
+            WebSocketClient.instance = new WebSocketClient();
+        }
+        return WebSocketClient.instance;
+    }
+
+    public send(message: any) {
+        // UI로 메시지 전송
         figma.ui.postMessage({
-            type: WSMessageType.START_TEST,
-            payload: config
+            type: 'websocket-send',
+            data: message
         });
     }
 
-    public stopTest() {
-        figma.ui.postMessage({
-            type: WSMessageType.STOP_TEST
-        });
+    public addListener(callback: (response: any) => void) {
+        this.listeners.push(callback);
     }
 
-    public getStatus() {
-        figma.ui.postMessage({
-            type: WSMessageType.GET_STATUS
-        });
+    public removeListener(callback: (response: any) => void) {
+        const index = this.listeners.indexOf(callback);
+        if (index > -1) {
+            this.listeners.splice(index, 1);
+        }
     }
 
     public close() {
         figma.ui.postMessage({
-            type: WSMessageType.STOP_TEST,
-            payload: { status: 'disconnected' }
+            type: 'websocket-close'
         });
     }
 }

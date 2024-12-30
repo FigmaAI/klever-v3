@@ -1,7 +1,7 @@
 // types.ts
 
 export interface ServerResponse {
-  status: 'success' | 'error' | 'in_progress';
+  status: 'success' | 'error';
   message: string;
   data?: any;
 }
@@ -9,12 +9,9 @@ export interface ServerResponse {
 export enum WSMessageType {
   INIT = 'INIT',
   CLOSE = 'CLOSE',
-  START_TEST = 'START_TEST',
-  STOP_TEST = 'STOP_TEST',
-  GET_STATUS = 'GET_STATUS',
+  TASK_SETUP = 'TASK_SETUP',
+  GET_SCREENSHOT = 'GET_SCREENSHOT',
   SCREENSHOT = 'SCREENSHOT',
-  STATUS_UPDATE = 'STATUS_UPDATE',
-  TEST_COMPLETE = 'TEST_COMPLETE',
   ERROR = 'ERROR'
 }
 
@@ -23,47 +20,34 @@ export interface WSMessage {
   payload?: any;
 }
 
-export interface TestConfig {
-  url: string;
+export interface ScreenshotArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type PluginMessage = {
+  type: 'init' | 'request-screenshot' | 'error';
+  url?: string;
   password?: string;
-  taskDesc?: string;
-  personaDesc?: string;
-}
-
-export interface ScreenshotData {
-  imageUrl: string;
-  timestamp: number;
-  elements?: UIElement[];
-}
-
-export interface UIElement {
-  uid: string;
-  bbox: [number, number, number, number];
-  type?: string;
-  text?: string;
-}
-
-export type PluginMessage = 
-  | { type: 'init'; url: string; password?: string }
-  | { type: 'explore'; taskDesc: string; personaDesc?: string }
-  | { type: 'stop-exploration' }
-  | { type: 'exploration-status' }
-  | { type: 'reset' }
-  | { type: 'error'; message: string };
+  message?: string;
+  nodeId?: string;
+};
 
 export interface ParsedReport {
-    title: string;
-    taskName: string;
-    taskDesc: string;
-    personaDesc: string;
-    rounds: Promise<ParsedRound>[];
+  title: string;
+  taskName: string;
+  taskDesc: string;
+  personaDesc: string;
+  rounds: Promise<ParsedRound>[];
 }
 
 export interface ParsedRound {
-    images: string[];
-    observation: string;
-    thoughts: string[];
-    action: string;
-    summary: string;
-    decision: string;
+  images: string[];
+  observation: string;
+  thoughts: string[];
+  action: string;
+  summary: string;
+  decision: string;
 }

@@ -31,96 +31,109 @@ import {
   AutoAwesome,
   FaceRetouchingNatural,
 } from '@mui/icons-material';
-import { WSMessageType, ServerResponse } from '../../typings/types';
 import { Player } from '@lottiefiles/react-lottie-player';
 import Animation from '../assets/Animation.json';
+import { handlePluginError } from '../../utils/messageHandlers';
 
 const App = () => {
   const [activeStep, setActiveStep] = React.useState(0);
-  const [data, setData] = React.useState<ServerResponse | null>(null);
   const [url, setUrl] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [taskDesc, setTaskDesc] = React.useState('');
-  const [personaDesc, setPersonaDesc] = React.useState('');
-  const [personaModalOpen, setPersonaModalOpen] = React.useState(false);
-
-  const [isLoading, setIsLoading] = React.useState(false);
   const [openModal, setOpenModal] = React.useState(false);
+  const [personaModalOpen, setPersonaModalOpen] = React.useState(false);
+  const [personaDesc, setPersonaDesc] = React.useState('');
+  const [data, setData] = React.useState<any>(null);
+  const [isConnecting, setIsConnecting] = React.useState(false);
+  const ws = React.useRef<WebSocket | null>(null);
+  const [targetNodeId, setTargetNodeId] = React.useState<string>('');
 
-  const handleInit = () => {
-    setIsLoading(true);
-    
-    const socket = new WebSocket('ws://localhost:8080');
-    socket.onopen = () => {
-        const initMessage = {
-            type: WSMessageType.INIT,
-            payload: { url, password: password || undefined }
-        };
-        socket.send(JSON.stringify(initMessage));
-    };
+  // targetNodeId 변경 모니터링
+  React.useEffect(() => {
+    console.log('Current target node ID:', targetNodeId);
+  }, [targetNodeId]);
 
-    socket.onmessage = (event) => {
-        const response = JSON.parse(event.data);
-        console.log('Server response:', response);
-        
+  React.useEffect(() => {
+    // WebSocket 연결 설정
+    ws.current = new WebSocket('ws://localhost:8080');
+
+    ws.current.onmessage = (event) => {
+      const response = JSON.parse(event.data);
+      console.log('WebSocket response:', response); // 디버깅용
+
+      if (response.type === 'INIT') {
+        setIsConnecting(false);  // 연결 상태 해제
+
         if (response.status === 'success') {
-            setActiveStep(1);
-            setIsLoading(false);
+          console.log('Setting target node ID to:', response.payload.nodeId);
+          setTargetNodeId(response.payload.nodeId);
+          setActiveStep(1);  // 다음 단계로 이동
+          // 필요한 데이터 저장
+          setData(response.payload);
+          console.log('Data:', response.payload);
         } else {
-            console.error('Server error:', response);
-            parent.postMessage({
-                pluginMessage: { type: 'error', message: response.payload.message }
-            }, '*');
-            setIsLoading(false);
+          // 에러 처리
+          handlePluginError(response.payload.message || 'Initialization failed');
         }
+      }
     };
 
-    socket.onerror = (error: Event) => {
-        console.error('WebSocket error:', error);
-        parent.postMessage({
-            pluginMessage: { type: 'error', message: 'WebSocket connection failed' }
-        }, '*');
-        setIsLoading(false);
+    ws.current.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      setIsConnecting(false);
+      handlePluginError('WebSocket connection error');
     };
+
+    // 플러그인으로부터의 메시지 처리
+    window.onmessage = (event) => {
+      if (event.data.pluginMessage) {
+        const msg = event.data.pluginMessage;
+        if (msg.type === 'websocket-send' && ws.current) {
+          ws.current.send(JSON.stringify(msg.data));
+        } else if (msg.type === 'websocket-close' && ws.current) {
+          ws.current.close();
+        }
+      }
+    };
+
+    return () => {
+      if (ws.current) {
+        ws.current.close();
+      }
+    };
+  }, []);
+
+  const handleInit = async () => {
+    if (isConnecting) return;
+
+    const nodeIdMatch = url.match(/node-id=([^&]+)/);
+    if (!nodeIdMatch) {
+      handlePluginError('Failed to extract node ID from URL');
+      return;
+    }
+
+    const matchedNodeId = decodeURIComponent(nodeIdMatch[1]);
+
+    setIsConnecting(true);
+
+    // 플러그인으로 메시지 전송
+    parent.postMessage({
+      pluginMessage: {
+        type: 'init',
+        url: url,
+        password: password,
+        nodeId: matchedNodeId
+      }
+    }, '*');
   };
 
-  const handleExplore = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-
-    try {
-        parent.postMessage({ 
-            pluginMessage: { type: 'explore', taskDesc, personaDesc }
-        }, '*');
-    } catch (error) {
-        console.error('Exploration error:', error);
-        parent.postMessage({
-            pluginMessage: { type: 'error', message: 'Failed to start exploration' }
-        }, '*');
-        setIsLoading(false);
-    }
-  };
-
-  const handleStop = () => {
-    try {
-        parent.postMessage({ pluginMessage: { type: 'stop-exploration' } }, '*');
-    } catch (error) {
-        console.error('Stop exploration error:', error);
-        parent.postMessage({
-            pluginMessage: { type: 'error', message: 'Failed to stop exploration' }
-        }, '*');
-    }
-  };
-
-  const handleStatus = () => {
-    try {
-        parent.postMessage({ pluginMessage: { type: 'exploration-status' } }, '*');
-    } catch (error) {
-        console.error('Status check error:', error);
-        parent.postMessage({
-            pluginMessage: { type: 'error', message: 'Failed to check status' }
-        }, '*');
-    }
+  const handleExplore = () => {
+    setIsConnecting(true);
+    parent.postMessage({
+      pluginMessage: {
+        type: 'request-screenshot'
+      }
+    }, '*');
   };
 
   const handleBack = () => {
@@ -129,132 +142,34 @@ const App = () => {
 
   const handleConfirmBack = () => {
     try {
-        const socket = new WebSocket('ws://localhost:8080');
-        socket.onopen = () => {
-            const closeMessage = {
-                type: WSMessageType.CLOSE,
-                payload: { message: "Close browser session" }
-            };
-            socket.send(JSON.stringify(closeMessage));
-        };
-
-        socket.onmessage = (event) => {
-            const response = JSON.parse(event.data);
-            console.log('Close response:', response);
-            
-            if (response.status !== 'success') {
-                console.error('Close session error:', response);
-                parent.postMessage({
-                    pluginMessage: { type: 'error', message: response.payload.message }
-                }, '*');
-            }
-        };
-
-        socket.onerror = (error: Event) => {
-            console.error('Close session WebSocket error:', error);
-            parent.postMessage({
-                pluginMessage: { type: 'error', message: 'Failed to close browser session' }
-            }, '*');
-        };
-
-        handleStop();
-        setOpenModal(false);
-        setActiveStep(0);
-        setUrl('');
-        setPassword('');
-        setTaskDesc('');
-        setPersonaDesc('');
-        setData(null);
+      if (ws.current) {
+        ws.current.send(JSON.stringify({
+          type: 'CLOSE',
+          payload: {}
+        }));
+      }
+      resetState();
     } catch (error) {
-        console.error('Reset error:', error);
-        parent.postMessage({
-            pluginMessage: { type: 'error', message: 'Failed to reset application state' }
-        }, '*');
+      console.error('Failed to reset:', error);
+      handlePluginError('Failed to reset application state');
     }
   };
 
-  const handleKeyDown = async (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-      handleExplore(e);
-    }
+  const resetState = () => {
+    setOpenModal(false);
+    setActiveStep(0);
+    setUrl('');
+    setPassword('');
+    setIsConnecting(false);
+    setData(null);
+    setTargetNodeId('');
   };
 
-  // const sendTestMessage = () => {
-  //   const socket = new WebSocket('ws://localhost:8080');
-  //   socket.onopen = () => {
-  //     const testMessage = {
-  //       type: WSMessageType.INIT,
-  //       payload: {
-  //         message: "Hello from Figma Plugin!"
-  //       }
-  //     };
-  //     socket.send(JSON.stringify(testMessage));
-  //     console.log('Test message sent');
-  //   };
-
-  //   socket.onmessage = (event) => {
-  //     console.log('Received response:', event.data);
-  //   };
-  // };
-
-  // WebSocket global message handler
-  React.useEffect(() => {
-    const socket = new WebSocket('ws://localhost:8080');
-
-    socket.onopen = () => {
-        console.log('Connected to WebSocket server');
-        setIsLoading(false);
-    };
-
-    socket.onmessage = (event) => {
-        try {
-            const message = JSON.parse(event.data);
-            console.log('WebSocket message:', message);
-            
-            switch (message.type) {
-                case WSMessageType.SCREENSHOT:
-                    setData(message.payload);
-                    break;
-                case WSMessageType.STATUS_UPDATE:
-                    setIsLoading(false);
-                    break;
-                case WSMessageType.ERROR:
-                    console.error('Server error:', message);
-                    parent.postMessage({
-                        pluginMessage: { type: 'error', message: message.payload.message }
-                    }, '*');
-                    setIsLoading(false);
-                    break;
-            }
-        } catch (error) {
-            console.error('Message parsing error:', error);
-            parent.postMessage({
-                pluginMessage: { type: 'error', message: 'Failed to process server message' }
-            }, '*');
-        }
-    };
-
-    socket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        parent.postMessage({
-            pluginMessage: { type: 'error', message: 'WebSocket connection error' }
-        }, '*');
-        setIsLoading(false);
-    };
-
-    socket.onclose = () => {
-        console.log('WebSocket connection closed');
-        setIsLoading(false);
-    };
-
-    return () => {
-        socket.close();
-    };
-  }, []);
-
-  React.useEffect(() => {
-    console.log('Active step changed:', activeStep);
-  }, [activeStep]);
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && e.ctrlKey) {
+      handleExplore();
+    }
+  };
 
   return (
     <CssVarsProvider>
@@ -286,7 +201,7 @@ const App = () => {
                   <Typography sx={{ fontSize: 'xs', fontWeight: 'xl', textTransform: 'uppercase' }}>
                     Initialize
                   </Typography>
-                  <Button color="neutral" variant="plain" onClick={handleBack} disabled={isLoading} size="sm">
+                  <Button color="neutral" variant="plain" onClick={handleBack} disabled={isConnecting} size="sm">
                     Reset
                   </Button>
                 </Box>
@@ -300,7 +215,7 @@ const App = () => {
                         value={url}
                         onChange={(e) => setUrl(e.target.value)}
                         placeholder="Enter the Figma Prototype URL"
-                        disabled={isLoading}
+                        disabled={isConnecting}
                       />
                     </FormControl>
                     <br />
@@ -311,13 +226,13 @@ const App = () => {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="Enter the password if required"
-                        disabled={isLoading}
+                        disabled={isConnecting}
                       />
                     </FormControl>
                   </CardContent>
                   <CardActions>
                     <Box sx={{ width: '100%', display: 'flex', justifyContent: 'flex-end', gap: 2 }}>
-                      <Button size="sm" onClick={handleInit} loading={isLoading} disabled={!url || isLoading}>
+                      <Button size="sm" onClick={handleInit} loading={isConnecting} disabled={!url || isConnecting}>
                         Initialize
                       </Button>
                     </Box>
@@ -352,7 +267,7 @@ const App = () => {
                   <Typography sx={{ fontSize: 'xs', fontWeight: 'xl', textTransform: 'uppercase' }}>
                     Task and Persona
                   </Typography>
-                  <Button color="neutral" variant="plain" onClick={handleBack} disabled={isLoading} size="sm">
+                  <Button color="neutral" variant="plain" onClick={handleBack} disabled={isConnecting} size="sm">
                     Reset
                   </Button>
                 </Box>
@@ -362,7 +277,7 @@ const App = () => {
                   <CardContent>
                     <Textarea
                       placeholder="Please enter the description of the task you want to test"
-                      disabled={isLoading}
+                      disabled={isConnecting}
                       value={taskDesc}
                       onChange={(e) => setTaskDesc(e.target.value)}
                       onKeyDown={handleKeyDown}
@@ -396,11 +311,10 @@ const App = () => {
                               : 'Persona'}
                           </Button>
                           <Button
-                            color="primary"
                             variant="solid"
                             onClick={handleExplore}
-                            disabled={!taskDesc || isLoading}
-                            loading={isLoading}
+                            disabled={!taskDesc || isConnecting}
+                            loading={isConnecting}
                             loadingIndicator="Loading…"
                             startDecorator={<AutoAwesome fontSize="small" />}
                             size="sm"
@@ -442,7 +356,7 @@ const App = () => {
                   <Typography sx={{ fontSize: 'xs', fontWeight: 'xl', textTransform: 'uppercase' }}>
                     Generating Report
                   </Typography>
-                  <Button color="neutral" variant="plain" onClick={handleBack} disabled={isLoading} size="sm">
+                  <Button color="neutral" variant="plain" onClick={handleBack} disabled={isConnecting} size="sm">
                     Reset
                   </Button>
                 </Box>
@@ -471,10 +385,6 @@ const App = () => {
                         </Typography>
                       </>
                     )}
-                    <br />
-                    <Button color="neutral" variant="outlined" onClick={handleStatus} sx={{ margin: 'auto', borderRadius: '16px' }}>
-                      Check Status
-                    </Button>
                   </CardContent>
                 </>
               )}
