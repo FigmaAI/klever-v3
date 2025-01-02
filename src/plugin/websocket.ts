@@ -43,4 +43,9 @@ export class WebSocketClient {
             type: 'websocket-close'
         });
     }
+
+    public onMessage(callback: (response: any) => void) {
+        this.addListener(callback);
+        return () => this.removeListener(callback);
+    }
 }

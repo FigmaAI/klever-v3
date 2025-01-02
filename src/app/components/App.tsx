@@ -47,6 +47,7 @@ const App = () => {
   const [isConnecting, setIsConnecting] = React.useState(false);
   const ws = React.useRef<WebSocket | null>(null);
   const [targetNodeId, setTargetNodeId] = React.useState<string>('');
+  const [currentRound, setCurrentRound] = React.useState(1);
 
   // targetNodeId 변경 모니터링
   React.useEffect(() => {
@@ -59,20 +60,16 @@ const App = () => {
 
     ws.current.onmessage = (event) => {
       const response = JSON.parse(event.data);
-      console.log('WebSocket response:', response); // 디버깅용
-
+      console.log('WebSocket response:', response);
+      
       if (response.type === 'INIT') {
-        setIsConnecting(false);  // 연결 상태 해제
-
+        setIsConnecting(false);
+        
         if (response.status === 'success') {
-          console.log('Setting target node ID to:', response.payload.nodeId);
-          setTargetNodeId(response.payload.nodeId);
-          setActiveStep(1);  // 다음 단계로 이동
-          // 필요한 데이터 저장
+          setActiveStep(1);
           setData(response.payload);
           console.log('Data:', response.payload);
         } else {
-          // 에러 처리
           handlePluginError(response.payload.message || 'Initialization failed');
         }
       }
@@ -105,15 +102,6 @@ const App = () => {
 
   const handleInit = async () => {
     if (isConnecting) return;
-
-    const nodeIdMatch = url.match(/node-id=([^&]+)/);
-    if (!nodeIdMatch) {
-      handlePluginError('Failed to extract node ID from URL');
-      return;
-    }
-
-    const matchedNodeId = decodeURIComponent(nodeIdMatch[1]);
-
     setIsConnecting(true);
 
     // 플러그인으로 메시지 전송
@@ -121,19 +109,58 @@ const App = () => {
       pluginMessage: {
         type: 'init',
         url: url,
-        password: password,
-        nodeId: matchedNodeId
+        password: password
       }
     }, '*');
   };
 
-  const handleExplore = () => {
+  const handleExplore = async () => {
+    if (!ws.current) return;
     setIsConnecting(true);
-    parent.postMessage({
-      pluginMessage: {
-        type: 'request-screenshot'
-      }
-    }, '*');
+
+    try {
+      ws.current.send(JSON.stringify({
+        type: 'GET_SCREENSHOT',
+        payload: {
+          prefix: `${currentRound}_before`,
+          round: currentRound
+        }
+      }));
+
+      const handleScreenshotResponse = (event: MessageEvent) => {
+        const response = JSON.parse(event.data);
+        
+        if (response.type === 'GET_SCREENSHOT') {
+          ws.current?.removeEventListener('message', handleScreenshotResponse);
+
+          if (response.status === 'success') {
+            parent.postMessage({
+              pluginMessage: {
+                type: 'submit',
+                data: {
+                  taskDesc,
+                  personaDesc,
+                  screenshotInfo: {
+                    nodeId: response.payload.nodeId,
+                    imageData: response.payload.imageData,
+                    round: currentRound
+                  }
+                }
+              }
+            }, '*');
+          } else {
+            handlePluginError(response.payload.message || 'Screenshot capture failed');
+            setIsConnecting(false);
+          }
+        }
+      };
+
+      ws.current.addEventListener('message', handleScreenshotResponse);
+    } catch (error) {
+      console.error('Error in handleExplore:', error);
+      handlePluginError('Failed to process exploration');
+      setIsConnecting(false);
+    }
   };
 
   const handleBack = () => {
@@ -163,6 +190,7 @@ const App = () => {
     setIsConnecting(false);
     setData(null);
     setTargetNodeId('');
+    setCurrentRound(1);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
