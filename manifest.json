@@ -7,8 +7,12 @@
   "editorType": ["figma"],
   "documentAccess": "dynamic-page",
   "networkAccess": {
-    "allowedDomains": ["https://figma.com", "ws://localhost:8080"],
-    "reasoning": "Required for WebSocket communication with KleverDesktop app",
+    "allowedDomains": [
+      "https://figma.com",
+      "ws://localhost:8080",
+      "https://api.openai.com"
+    ],
+    "reasoning": "Required for WebSocket communication with KleverDesktop app and OpenAI API access",
     "devAllowedDomains": ["ws://localhost:8080"]
   },
   "permissions": ["currentuser"]

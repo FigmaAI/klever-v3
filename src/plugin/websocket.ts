@@ -1,16 +1,9 @@
 export class WebSocketClient {
     private static instance: WebSocketClient;
+    private ws: WebSocket | null = null;
     private listeners: ((response: any) => void)[] = [];
 
-    private constructor() {
-        // UI와의 메시지 통신 설정
-        figma.ui.onmessage = (event) => {
-            if (event.type === 'websocket-message') {
-                const response = event.data;
-                this.listeners.forEach(listener => listener(response));
-            }
-        };
-    }
+    private constructor() {}
 
     public static getInstance(): WebSocketClient {
         if (!WebSocketClient.instance) {
@@ -19,12 +12,16 @@ export class WebSocketClient {
         return WebSocketClient.instance;
     }
 
-    public send(message: any) {
-        // UI로 메시지 전송
-        figma.ui.postMessage({
-            type: 'websocket-send',
-            data: message
-        });
+    get readyState(): number | undefined {
+        return this.ws?.readyState;
+    }
+
+    send(data: any): void {
+        if (this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(data));
+        } else {
+            console.error('WebSocket is not open');
+        }
     }
 
     public addListener(callback: (response: any) => void) {
@@ -47,5 +44,10 @@ export class WebSocketClient {
     public onMessage(callback: (response: any) => void) {
         this.addListener(callback);
         return () => this.removeListener(callback);
+    }
+
+    // UI로부터 받은 WebSocket 응답을 처리
+    public handleUIMessage(response: any) {
+        this.listeners.forEach(listener => listener(response));
     }
 }

@@ -33,18 +33,21 @@ export interface ScreenshotInfo {
   imageData: string;
 }
 
-export type PluginMessage = {
-  type: 'init' | 'submit' | 'request-screenshot' | 'error';
-  url?: string;
-  password?: string;
-  message?: string;
-  nodeId?: string;
-  data?: {
-    taskDesc: string;
-    personaDesc: string;
-    screenshotInfo: ScreenshotInfo;
-  };
-};
+export interface TaskSubmitData {
+  taskDesc: string;
+  personaDesc: string;
+  screenshotInfo: ScreenshotInfo;
+}
+
+export type PluginMessage = 
+  | { type: 'init'; url: string; password: string }
+  | { type: 'submit'; data: TaskSubmitData }
+  | { type: 'request-screenshot'; nodeId: string }
+  | { type: 'error'; message: string }
+  | { type: 'saveApiKey'; data: string }
+  | { type: 'deleteApiKey' }
+  | { type: 'getCurrentApiKey' }
+  | { type: 'currentApiKey'; message: string };
 
 export interface ParsedReport {
   title: string;
@@ -75,12 +78,12 @@ export interface UIElement {
 
 // Defines the configuration type passed to the AI model constructor
 export interface AIModelConfig {
-  model: string;
-  temperature: number;
-  maxTokens: number;
-  modelType: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  modelType?: string;
   baseUrl?: string;
-  apiKey?: string;
+  apiKey: string;
 }
 
 // Defines the response type from the AI model
@@ -118,4 +121,15 @@ export interface WSScreenshotResponse {
     imageData: string;
     round: number;
   };
+}
+
+// Config interface for OpenAI settings
+export interface Config {
+  MODEL: string;
+  OPENAI_API_BASE: string;
+  OPENAI_API_KEY: string;
+  OPENAI_API_MODEL: string;
+  MAX_TOKENS: number;
+  TEMPERATURE: number;
+  REQUEST_INTERVAL: number;
 }

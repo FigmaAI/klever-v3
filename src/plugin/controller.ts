@@ -1,11 +1,16 @@
-import { PluginMessage } from '../typings/types';
+import type { PluginMessage } from '../typings/types';
 import { WebSocketClient } from './websocket';
 import {
   createTaskFrameWithNameAndDesc,
   createPreviewAndImageFrames,
   sendNodeInfoToUI,
+  getImageBase64,
+  processAIResponseAndCreateFrames,
+  updateExplorationState,
   // checkTrialStatus
 } from './FigmaUtils';
+import { createModelInstance } from './api';
+import { createPromptForTask } from './prompts';  // Import prompt generator
 
 figma.showUI(__html__, { width: 480, height: 640 });
 
@@ -74,16 +79,28 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
       await figma.clientStorage.setAsync('dimensions', dimensions);
 
-      // 3. Send initialization request to server via WebSocket
-      ws.send({
-        type: 'INIT',
-        payload: {
-          url,
-          password,
-          width: dimensions.width,
-          height: dimensions.height,
-        },
-      });
+      // WebSocket 연결 상태 확인 및 로깅 추가
+      console.log('WebSocket ready state:', ws.readyState);
+      
+      try {
+        // UI를 통해 WebSocket 메시지 전송
+        figma.ui.postMessage({
+          type: 'websocket-send',
+          data: {
+            type: 'INIT',
+            payload: {
+              url,
+              password,
+              width: dimensions.width,
+              height: dimensions.height,
+            }
+          }
+        });
+        console.log('INIT message sent to UI');
+      } catch (error) {
+        console.error('Failed to send INIT message:', error);
+        throw error;
+      }
     } catch (error) {
       console.error('Initialization error details:', {
         error: error,
@@ -97,7 +114,7 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
         message: error.message,
       });
     }
-  } else if (msg.type === 'submit') {
+  } else if (msg.type === 'submit' && typeof msg.data !== 'string') {
     try {
       const { taskDesc, personaDesc, screenshotInfo } = msg.data;
       
@@ -123,22 +140,8 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
         personaDesc,
       });
 
-      // 2. Get stored dimensions
+      // 2. Get stored dimensions and create preview frames
       const dimensions = await figma.clientStorage.getAsync('dimensions');
-      console.log('Retrieved dimensions:', dimensions);
-
-      if (!dimensions) {
-        throw new Error('Dimensions not found');
-      }
-
-      // 3. Create preview frames with original and labeled images
-      console.log('Creating preview frames with:', {
-        nodeId: screenshotInfo.nodeId,
-        round: screenshotInfo.round,
-        hasImageData: !!screenshotInfo.imageData,
-        dimensions,
-      });
-
       const { previewFrame, originalImage, labeledImage } = await createPreviewAndImageFrames(
         screenshotInfo.nodeId,
         taskFrame,
@@ -147,19 +150,81 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
         dimensions
       );
 
-      // 4. Notify UI of completion
-      figma.ui.postMessage({
-        type: 'explore-complete',
-        payload: {
-          previewFrameId: previewFrame.id,
-          originalImageId: originalImage.id,
-          labeledImageId: labeledImage.id,
-        },
-      });
+      // 3. Generate prompt and get AI response
+      try {
+        // nodeId가 변경될 때마다 상태 업데이트
+        await updateExplorationState(screenshotInfo.nodeId);
+
+        const modelInstance = await createModelInstance();
+        const labeledImageBase64 = await getImageBase64(labeledImage);
+        
+        const prompt = createPromptForTask(taskDesc, personaDesc);
+        const response = await modelInstance.getModelResponse(prompt, [labeledImageBase64]);
+        
+        if (!response.success) {
+          throw new Error(`AI model error: ${response.error}`);
+        }
+
+        const actionInfo = await processAIResponseAndCreateFrames(
+          response.data,
+          previewFrame,
+          labeledImage
+        );
+
+        // WebSocket을 통해 action 정보 전송
+        figma.ui.postMessage({
+          type: 'websocket-send',
+          data: {
+            type: 'EXECUTE_ACTION',
+            payload: {
+              actionType: actionInfo.actionType,
+              params: actionInfo.actionParams,
+              summary: actionInfo.summary
+            }
+          }
+        });
+
+        // UI에 완료 알림
+        figma.ui.postMessage({
+          type: 'explore-complete',
+          payload: {
+            previewFrameId: previewFrame.id,
+            originalImageId: originalImage.id,
+            labeledImageId: labeledImage.id,
+            aiResponse: response.data
+          },
+        });
+
+      } catch (error) {
+        console.error('AI analysis error:', error);
+        figma.notify('Failed to analyze interface: ' + error.message, { error: true });
+        
+        figma.ui.postMessage({
+          type: 'explore-complete',
+          payload: {
+            previewFrameId: previewFrame.id,
+            originalImageId: originalImage.id,
+            labeledImageId: labeledImage.id,
+            error: error.message
+          },
+        });
+      }
     } catch (error) {
       console.error('Error:', error);
       figma.notify('Error: ' + error.message, { error: true });
     }
+  } else if (msg.type === 'saveApiKey') {
+    const apiKey: string = msg.data;
+    await figma.clientStorage.setAsync('openai-api-key', apiKey);
+    figma.notify('API key has been saved', { timeout: 2000 });
+    figma.ui.postMessage({ type: 'currentApiKey', message: apiKey });
+  } else if (msg.type === 'deleteApiKey') {
+    await figma.clientStorage.deleteAsync('openai-api-key');
+    figma.notify('API key has been deleted', { timeout: 2000 });
+    figma.ui.postMessage({ type: 'currentApiKey', message: '' });
+  } else if (msg.type === 'getCurrentApiKey') {
+    const apiKey = await figma.clientStorage.getAsync('openai-api-key');
+    figma.ui.postMessage({ type: 'currentApiKey', message: apiKey || '' });
   }
 };
 
