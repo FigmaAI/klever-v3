@@ -41,13 +41,26 @@ export interface TaskSubmitData {
 
 export type PluginMessage = 
   | { type: 'init'; url: string; password: string }
-  | { type: 'submit'; data: TaskSubmitData }
-  | { type: 'request-screenshot'; nodeId: string }
   | { type: 'error'; message: string }
   | { type: 'saveApiKey'; data: string }
   | { type: 'deleteApiKey' }
   | { type: 'getCurrentApiKey' }
-  | { type: 'currentApiKey'; message: string };
+  | { type: 'currentApiKey'; message: string }
+  | { type: 'websocket-send'; data: WSMessage }
+  | { 
+      type: 'submit'; 
+      data: {
+        taskData: {
+          taskDesc: string;
+          personaDesc: string;
+        },
+        screenshotInfo: {
+          nodeId: string;
+          imageData: string;
+          round: number;
+        }
+      }
+    };
 
 export interface ParsedReport {
   title: string;
@@ -75,7 +88,6 @@ export interface UIElement {
   bbox: { x: number; y: number; width: number; height: number };
 }
 
-
 // Defines the configuration type passed to the AI model constructor
 export interface AIModelConfig {
   model?: string;
@@ -98,9 +110,6 @@ export interface TaskData {
   personaDesc?: string;
 }
 
-export interface TaskFrameResult {
-  taskFrame: FrameNode;
-}
 
 export interface PreviewFrameResult {
   previewFrame: FrameNode;
@@ -133,3 +142,4 @@ export interface Config {
   TEMPERATURE: number;
   REQUEST_INTERVAL: number;
 }
+

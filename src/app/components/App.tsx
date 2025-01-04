@@ -150,8 +150,10 @@ const App = () => {
               pluginMessage: {
                 type: 'submit',
                 data: {
-                  taskDesc,
-                  personaDesc,
+                  taskData: {
+                    taskDesc,
+                    personaDesc
+                  },
                   screenshotInfo: {
                     nodeId: response.payload.nodeId,
                     imageData: response.payload.imageData,

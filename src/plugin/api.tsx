@@ -19,54 +19,45 @@ export class AIModel {
   }
 
   async getModelResponse(prompt: string, images: string[]) {
-    const content = [
-      {
-        role: 'system',
-        content: [
-          {
-            type: 'text',
-            text: prompt,
-          },
-        ],
-      },
-      {
-        role: 'user',
-        content: images.map((image) => ({
-          type: 'image_url',
-          image_url: {
-            url: `data:image/jpeg;base64,${image}`,
-          },
-        })),
-      },
-    ];
-
-    const payload = {
-      model: this.model,
-      messages: content,
-      temperature: this.temperature,
-      max_tokens: this.maxTokens,
-    };
-
-    const headers = {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${this.apiKey}`,
-    };
-
     try {
       const response = await fetch(this.baseUrl, {
         method: 'POST',
-        headers: headers,
-        body: JSON.stringify(payload),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            {
+              role: 'system',
+              content: [{ type: 'text', text: prompt }],
+            },
+            {
+              role: 'user',
+              content: images.map((image) => ({
+                type: 'image_url',
+                image_url: { url: `data:image/jpeg;base64,${image}` },
+              })),
+            },
+          ],
+          temperature: this.temperature,
+          max_tokens: this.maxTokens,
+        }),
       });
+
       const data = await response.json();
 
       if (!response.ok || data.error) {
-        console.error(`${this.modelType} Model error:`, data.error ? data.error : 'Unknown error');
-        return { success: false, error: data.error ? data.error : 'Unknown error' };
+        console.error(`${this.modelType} Model error:`, data.error || 'Unknown error');
+        return { success: false, error: data.error || 'Unknown error' };
       }
 
-      console.log(`${this.modelType} Model response:`, data);
-      return { success: true, data: data.choices[0].message.content };
+      const content = data.choices[0].message.content;
+      console.log('Raw response content:', content);
+      
+      return content;
+
     } catch (error) {
       console.error('Fetch error:', error);
       return { success: false, error: error.message };
