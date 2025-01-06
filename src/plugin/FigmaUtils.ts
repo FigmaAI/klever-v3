@@ -1,23 +1,69 @@
-import { UIElement, ImageDimensions, ScreenshotInfo, TaskData } from '../typings/types';
-import { createPromptForTask } from './prompts';
+import {
+  UIElement,
+  ImageDimensions,
+  ScreenshotInfo,
+  TaskData,
+  ExploreResponse,
+} from '../typings/types';
 
 // Basic UI creation utilities
-export function createText(characters: string, fontSize: number, fontStyle: 'Regular' | 'Bold'): TextNode {
+export function createText(
+  characters: string, 
+  fontSize: number, 
+  fontStyle: 'Regular' | 'Bold',
+  color: string | { r: number; g: number; b: number; } = '#000000'  // 헥스 코드나 RGB 객체 모두 받을 수 있음
+): TextNode {
+  const rgbColor = typeof color === 'string' ? hexToRgb(color) : color;
+
   const text = figma.createText();
   text.characters = characters;
   text.fontSize = fontSize;
   text.fontName = { family: 'Inter', style: fontStyle };
   text.textAutoResize = 'WIDTH_AND_HEIGHT';
+  text.fills = [{ type: 'SOLID', color: rgbColor }];
+
   return text;
 }
 
-export function createTextFrame(title: string, content: string): FrameNode {
+// Hex to RGB color converter
+export function hexToRgb(hex: string) {
+  try {
+    hex = hex.replace(/^#/, '');
+    const r = Math.min(parseInt(hex.substring(0, 2), 16) / 255, 1);
+    const g = Math.min(parseInt(hex.substring(2, 4), 16) / 255, 1);
+    const b = Math.min(parseInt(hex.substring(4, 6), 16) / 255, 1);
+
+    if (isNaN(r) || isNaN(g) || isNaN(b)) {
+      throw new Error('Invalid hex color');
+    }
+
+    const color = {
+      r: Math.max(0, Math.min(r, 1)),
+      g: Math.max(0, Math.min(g, 1)),
+      b: Math.max(0, Math.min(b, 1))
+    };
+
+    return color;
+  } catch (error) {
+    console.error('Error in hexToRgb:', error);
+    return { r: 0, g: 0, b: 0 };
+  }
+}
+
+export function createTextFrame(
+  title: string, 
+  content: string,
+  color: string | { r: number; g: number; b: number; } = '#000000'  // 헥스 코드나 RGB 객체 모두 받을 수 있음
+): FrameNode {
+  // 컬러 처리
+  const rgbColor = typeof color === 'string' ? hexToRgb(color) : color;
+
   const frame = figma.createFrame();
   frame.name = title;
 
-  const titleText = createText(title, 32, 'Bold');
+  const titleText = createText(title, 32, 'Bold', rgbColor);
   const decodedContent = content.replace(/\\(.)/g, '$1');
-  const contentText = createText(decodedContent, 24, 'Regular');
+  const contentText = createText(decodedContent, 24, 'Regular', rgbColor);
 
   frame.appendChild(titleText);
   frame.appendChild(contentText);
@@ -35,15 +81,22 @@ export function createTextFrame(title: string, content: string): FrameNode {
   return frame;
 }
 
-export function createPreviewFrame(): FrameNode {
+export function createPreviewFrame(roundCount: number): FrameNode {
   const frame = figma.createFrame();
-  frame.name = 'preview';
-  frame.layoutMode = 'VERTICAL';
-  frame.itemSpacing = 32;
-  frame.paddingTop = frame.paddingBottom = frame.paddingLeft = frame.paddingRight = 32;
-  frame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+  frame.name = `preview_${roundCount}`;
+  frame.layoutMode = 'HORIZONTAL';
+  frame.paddingTop = frame.paddingBottom = frame.paddingLeft = frame.paddingRight = 64;
+  frame.itemSpacing = 64;
+  
+  const bgColor = hexToRgb('#000000');
+  frame.fills = [{ type: 'SOLID', color: bgColor }];
+  
   frame.primaryAxisSizingMode = 'AUTO';
   frame.counterAxisSizingMode = 'AUTO';
+
+  const titleText = createText(`Round ${roundCount}`, 48, 'Bold', '#FFFFFF');
+  frame.appendChild(titleText);
+
   return frame;
 }
 
@@ -96,14 +149,15 @@ export async function loadFonts() {
   await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
 }
 
-function createAnatomyFrame(round: number): FrameNode {
+export function createAnatomyFrame(): FrameNode {
   const frame = figma.createFrame();
-  frame.name = `Round ${round}`;
+  frame.name = 'anatomy';
   frame.layoutMode = 'VERTICAL';
-  frame.itemSpacing = 32;
-  frame.fills = [];
+  frame.paddingTop = frame.paddingBottom = frame.paddingLeft = frame.paddingRight = 64;
+  frame.itemSpacing = 32; // 상호 간격 설정
   frame.primaryAxisSizingMode = 'AUTO';
   frame.counterAxisSizingMode = 'AUTO';
+
   return frame;
 }
 
@@ -112,14 +166,11 @@ export async function createElemList(
   elemList: UIElement[] = [],
   root: SceneNode = node
 ): Promise<UIElement[]> {
-  // if the node is not visible, return the elemList
   if (!node.visible) {
     return elemList;
   }
 
-  // Only 'FRAME', 'INSTANCE', 'COMPONENT' types are considered as UI elements
   if (['FRAME', 'INSTANCE', 'COMPONENT'].includes(node.type)) {
-    // check if the node has absoluteBoundingBox property
     if (node.absoluteBoundingBox !== null && root.absoluteBoundingBox !== null) {
       const { x, y, width, height } = node.absoluteBoundingBox;
       elemList.push({
@@ -136,7 +187,6 @@ export async function createElemList(
     }
   }
 
-  // if the node has children, recursively call createElemList for each child
   if ('children' in node) {
     for (const child of node.children) {
       await createElemList(child, elemList, root);
@@ -150,10 +200,10 @@ export async function createLabeledImageFrame(
   elemList: UIElement[],
   imageData: string,
   dimensions: ImageDimensions,
-  round: number
+  roundCount: number
 ) {
   const labeledFrame = figma.createFrame();
-  labeledFrame.name = `${round}_after_labeled`;
+  labeledFrame.name = `${roundCount}_after_labeled`;
   labeledFrame.resize(dimensions.width, dimensions.height);
 
   const imageHash = (await figma.createImageAsync(imageData)).hash;
@@ -192,96 +242,85 @@ export async function createLabeledImageFrame(
   return labeledFrame;
 }
 
-export async function parseExploreRsp(
-  rsp: string,
-  previewFrame: FrameNode,
-  elemList: UIElement[],
-  screenshotInfo: ScreenshotInfo
-): Promise<(string | number)[] | null> {
-  // 뷰포트 포커스 조정
-  figma.viewport.scrollAndZoomIntoView([previewFrame]);
-
+export async function parseExploreRsp(rsp: string): Promise<ExploreResponse> {
   try {
-    console.log('parseExploreRsp input:', rsp);
-    const parsedResponse = parseModelResponse(rsp);
-    if (!parsedResponse) {
-      console.error('ERROR: Failed to parse the model response');
-      return null;
+    const observationMatch = rsp.match(/Observation: ([\s\S]*?)(?:\\n\\nThought:|$)/);
+    const thoughtMatch = rsp.match(/Thought: ([\s\S]*?)(?:\\n\\nAction:|$)/);
+    const actionMatch = rsp.match(/Action: ([\s\S]*?)(?:\\n\\nSummary:|$)/);
+    const summaryMatch = rsp.match(/Summary: ([\s\S]*?)(?="$)/);
+
+    if (!observationMatch || !thoughtMatch || !actionMatch || !summaryMatch) {
+      throw new Error('Failed to parse model response');
     }
 
-    const { observation, thought, action, summary } = parsedResponse;
-
-    // Create a new frame for the model response
-    const modelResponseFrame = figma.createFrame();
-    modelResponseFrame.fills = [];
-    modelResponseFrame.name = 'Klever UT Response';
-    modelResponseFrame.layoutMode = 'VERTICAL';
-    modelResponseFrame.itemSpacing = 32;
-    modelResponseFrame.primaryAxisSizingMode = 'AUTO';
-    modelResponseFrame.counterAxisSizingMode = 'AUTO';
-
-    // Add the observation, thought, action, and summary to the model response frame
-    modelResponseFrame.appendChild(createTextFrame('Observation', observation));
-    modelResponseFrame.appendChild(createTextFrame('Thought', thought));
-    modelResponseFrame.appendChild(createTextFrame('Action', action));
-    modelResponseFrame.appendChild(createTextFrame('Summary', summary));
-
-    // Create a new frame for the action image
-    const actionImageFrame = await createImageFrame(
-      screenshotInfo.imageData,
-      `${screenshotInfo.round}_before_labeled_action`
-    );
-
-    // Highlight the selected UI element based on action type
-    if (action.includes('tap') || action.includes('long_press')) {
-      const area = parseInt(action.match(/\((.*?)\)/)[1]);
-      const selectedElem = elemList[area - 1];
-
-      // Create a rectangle for the bounding box
-      const bboxRect = createBoundingBox(selectedElem);
-      // Create a touch point
-      const touchPoint = createTouchPoint(selectedElem);
-
-      actionImageFrame.appendChild(bboxRect);
-      actionImageFrame.appendChild(touchPoint);
-    } else if (action.includes('swipe')) {
-      const params = action.match(/swipe\((.*?)\)/)[1].split(',');
-      const area = parseInt(params[0]);
-      const direction = params[1].trim();
-      const distance = params[2].trim();
-      const selectedElem = elemList[area - 1];
-
-      const bboxRect = createBoundingBox(selectedElem);
-      const swipeLine = createSwipeArrow(selectedElem, direction, distance);
-
-      actionImageFrame.appendChild(bboxRect);
-      actionImageFrame.appendChild(swipeLine);
-    } else if (action.includes('text')) {
-      const match = action.match(/text\((.*?)\)/);
-      if (!match) throw new Error('Invalid text action format');
-
-      const params = match[1].split(',');
-      const area = parseInt(params[0]);
-      const inputStr = params[1].trim().slice(1, -1); // Remove quotes
-      const selectedElem = elemList[area - 1];
-
-      const bboxRect = createBoundingBox(selectedElem);
-      const speechBubble = createSpeechBubble(selectedElem, inputStr);
-
-      actionImageFrame.appendChild(bboxRect);
-      actionImageFrame.appendChild(speechBubble);
-    }
-
-    // Add the action image frame to the preview frame
-    previewFrame.appendChild(actionImageFrame);
-    // Add the model response frame to the preview frame
-    previewFrame.appendChild(modelResponseFrame);
-
-    return [observation, thought, action, summary];
+    return {
+      observation: observationMatch[1],
+      thought: thoughtMatch[1],
+      action: actionMatch[1],
+      summary: summaryMatch[1],
+    };
   } catch (error) {
     console.error('Error in parseExploreRsp:', error);
-    return null;
+    throw error;
   }
+}
+
+// 새로운 함수들
+export function createModelResponseFrame(
+  observation: string,
+  thought: string,
+  action: string,
+  summary: string
+): FrameNode {
+  const modelResponseFrame = figma.createFrame();
+  modelResponseFrame.fills = [];
+  modelResponseFrame.name = 'Klever UT Response';
+  modelResponseFrame.layoutMode = 'VERTICAL';
+  modelResponseFrame.itemSpacing = 32;
+  modelResponseFrame.primaryAxisSizingMode = 'AUTO';
+  modelResponseFrame.counterAxisSizingMode = 'AUTO';
+
+  modelResponseFrame.appendChild(createTextFrame('Observation', observation, '#ffffff'));
+  modelResponseFrame.appendChild(createTextFrame('Thought', thought, '#ffffff'));
+  modelResponseFrame.appendChild(createTextFrame('Action', action, '#ffffff'));
+  modelResponseFrame.appendChild(createTextFrame('Summary', summary, '#ffffff'));
+
+  return modelResponseFrame;
+}
+
+export async function createActionImageFrame(
+  action: string,
+  elemList: UIElement[],
+  screenshotInfo: ScreenshotInfo,
+  roundCount: number
+): Promise<FrameNode> {
+  const actionImageFrame = await createImageFrame(screenshotInfo.imageData, `${roundCount}_before_labeled_action`);
+
+  if (action.includes('tap') || action.includes('long_press')) {
+    const area = parseInt(action.match(/\((.*?)\)/)[1]);
+    const selectedElem = elemList[area - 1];
+    actionImageFrame.appendChild(createBoundingBox(selectedElem));
+    actionImageFrame.appendChild(createTouchPoint(selectedElem));
+  } else if (action.includes('swipe')) {
+    const params = action.match(/swipe\((.*?)\)/)[1].split(',');
+    const area = parseInt(params[0]);
+    const direction = params[1].trim();
+    const distance = params[2].trim();
+    const selectedElem = elemList[area - 1];
+    actionImageFrame.appendChild(createBoundingBox(selectedElem));
+    actionImageFrame.appendChild(createSwipeArrow(selectedElem, direction, distance));
+  } else if (action.includes('text')) {
+    const match = action.match(/text\((.*?)\)/);
+    if (!match) throw new Error('Invalid text action format');
+    const params = match[1].split(',');
+    const area = parseInt(params[0]);
+    const inputStr = params[1].trim().slice(1, -1);
+    const selectedElem = elemList[area - 1];
+    actionImageFrame.appendChild(createBoundingBox(selectedElem));
+    actionImageFrame.appendChild(createSpeechBubble(selectedElem, inputStr));
+  }
+
+  return actionImageFrame;
 }
 
 export function createSpeechBubble(selectedElem: UIElement, text: string): FrameNode {
@@ -409,30 +448,55 @@ export async function createTaskFrameWithNameAndDesc(taskData: TaskData): Promis
   const taskDescFrame = createTaskDescFrame(taskData);
   taskFrame.appendChild(taskDescFrame);
 
-
   return taskFrame;
 }
 
-export async function getGenerateReportPrompt(
-  taskData: TaskData,
-  taskFrame: FrameNode,
-  screenshotInfo: ScreenshotInfo,
-  dimensions: ImageDimensions
-) {
-  // Create anatomy frame
-  const anatomyFrame = createAnatomyFrame(screenshotInfo.round);
-  taskFrame.appendChild(anatomyFrame);
+// export async function getGenerateReportPrompt(
+//   taskData: TaskData,
+//   screenshotInfo: ScreenshotInfo,
+//   taskFrame: FrameNode,
+//   dimensions?: ImageDimensions
+// ) {
+//   try {
+//     // set initial variables (for the future use)
+//     // let lastAct = 'None';
 
+//     // request AI model and process response
+//     const prompt = createPromptForTask(taskData);
+
+//     // load dimensions if it is not provided
+//     if (!dimensions) {
+//       dimensions = await figma.clientStorage.getAsync('dimensions');
+//     }
+//     // create frames for the task and the image
+//     const { previewFrameId, beforeImageFrameId, labeledImageFrameId, elemList } =
+//       await createPreviewAndImageFrames(taskFrame, screenshotInfo, dimensions);
+
+//     return {
+//       prompt,
+//       previewFrameId,
+//       beforeImageFrameId,
+//       labeledImageFrameId,
+//       elemList
+//     };
+//   } catch (error) {
+//     console.error('Error in generateReport:', error);
+//     figma.notify('Failed to generate report', { timeout: 3000 });
+//   }
+// }
+
+export async function createPreviewAndImageFrames(
+  anatomyFrame: FrameNode,
+  screenshotInfo: ScreenshotInfo,
+  dimensions: ImageDimensions,
+  roundCount: number
+) {
   // Create preview frame
-  const previewFrame = createPreviewFrame();
+  const previewFrame = createPreviewFrame(roundCount);
   anatomyFrame.appendChild(previewFrame);
 
   // Create before image
-  const beforeImageFrame = await createImageFrame(
-    screenshotInfo.imageData,
-    `${screenshotInfo.round}_before`,
-    dimensions
-  );
+  const beforeImageFrame = await createImageFrame(screenshotInfo.imageData, `${roundCount}_before`, dimensions);
   previewFrame.appendChild(beforeImageFrame);
 
   // Get element list
@@ -441,90 +505,95 @@ export async function getGenerateReportPrompt(
   const elemList = await createElemList(node);
 
   // Create labeled image
-  const labeledImageFrame = await createLabeledImageFrame(
-    elemList,
-    screenshotInfo.imageData,
-    dimensions,
-    screenshotInfo.round
-  );
+  const labeledImageFrame = await createLabeledImageFrame(elemList, screenshotInfo.imageData, dimensions, roundCount);
+  // set time delay for the afterImage to load
+  await delay(500);
   previewFrame.appendChild(labeledImageFrame);
 
-  // Create prompt
-  const prompt = createPromptForTask(taskData);
-
   return {
-    prompt,
-    previewFrameId: previewFrame.id,
-    beforeImageFrameId: beforeImageFrame.id,
-    labeledImageFrameId: labeledImageFrame.id,
-    elemList,
+    previewFrame: previewFrame,
+    beforeImageFrame: beforeImageFrame,
+    labeledImageFrame: labeledImageFrame,
+    elemList: elemList,
   };
 }
 
-export async function generateReportResult(
-  responseData: any,
-  previewFrameId: string,
-  beforeImageFrameId: string,
-  elemList: UIElement[],
-  screenshotInfo: ScreenshotInfo,
-  taskFrame: FrameNode
-) {
-  try {
-    if (responseData) {
-      console.log('Received response from AI');
+// export async function generateReportResult(
+//   responseData: any,
+//   previewFrameId: string,
+//   elemList: UIElement[],
+//   screenshotInfo: ScreenshotInfo,
+//   taskFrame: FrameNode,
+//   roundCount: number
+// ) {
+//   try {
+//     if (responseData) {
+//       console.log('Received response from AI');
 
-      // get the frames
-      const previewFrame = (await figma.getNodeByIdAsync(previewFrameId)) as FrameNode;
-      const beforeImageFrame = (await figma.getNodeByIdAsync(beforeImageFrameId)) as FrameNode;
+//       // get the frames
+//       const previewFrame = (await figma.getNodeByIdAsync(previewFrameId)) as FrameNode;
 
-      if (!previewFrame || !beforeImageFrame) {
-        throw new Error('Required frames not found');
-      }
+//       if (!previewFrame) {
+//         throw new Error('Required frames not found');
+//       }
 
-      const result = parseExploreRsp(JSON.stringify(responseData), previewFrame, elemList, screenshotInfo);
+//       const result = parseModelResponse(JSON.stringify(responseData));
 
-      if (!result) {
-        throw new Error('Failed to parse AI response');
-      }
+//       if (!result) {
+//         throw new Error('Failed to parse AI response');
+//       }
 
-      console.log('AI Model Response:', result);
+//       console.log('AI Model Response:', result);
 
-      // Move focus to the task Frame report
-      figma.viewport.scrollAndZoomIntoView([taskFrame]);
-      console.log('Report generated successfully', taskFrame.id);
-    }
-  } catch (error) {
-    console.error('Error in generateReportResult:', error);
-    figma.notify('Failed to generate report', { timeout: 3000 });
-  }
-}
+//       // Move focus to the task Frame report
+//       figma.viewport.scrollAndZoomIntoView([taskFrame]);
+//       console.log('Report generated successfully', taskFrame.id);
 
-export function parseModelResponse(
-  rsp: string
-): { observation: string; thought: string; action: string; summary: string } | null {
-  const observationMatch = rsp.match(/Observation: ([^\n]*)/);
-  const thoughtMatch = rsp.match(/Thought: ([^\n]*)/);
-  const actionMatch = rsp.match(/Action: ([^\n]*)/);
-  const summaryMatch = rsp.match(/Summary: ([^\n]*)/);
+//       return result;
+//     }
+//   } catch (error) {
+//     console.error('Error in generateReportResult:', error);
+//     figma.notify('Failed to generate report', { timeout: 3000 });
+//     return null;
+//   }
+// }
 
-  if (!observationMatch || !thoughtMatch || !actionMatch || !summaryMatch) {
-    console.error('Failed to match one or more patterns:', {
-      observationMatch: !!observationMatch,
-      thoughtMatch: !!thoughtMatch,
-      actionMatch: !!actionMatch,
-      summaryMatch: !!summaryMatch,
-    });
-    console.error('ERROR: Failed to parse the model response', rsp);
-    return null;
-  }
+// export function parseModelResponse(
+//   rsp: string
+// ): { observation: string; thought: string; action: string; summary: string } | null {
+//   try {
+//     const observationMatch = rsp.match(/Observation: ([\s\S]*?)(?:\\n\\nThought:|$)/);
+//     const thoughtMatch = rsp.match(/Thought: ([\s\S]*?)(?:\\n\\nAction:|$)/);
+//     const actionMatch = rsp.match(/Action: ([\s\S]*?)(?:\\n\\nSummary:|$)/);
+//     const summaryMatch = rsp.match(/Summary: ([\s\S]*?)(?="$)/);
 
-  return {
-    observation: observationMatch[1],
-    thought: thoughtMatch[1],
-    action: actionMatch[1],
-    summary: summaryMatch[1],
-  };
-}
+//     console.log('rsp:', rsp);
+//     console.log('Observation:', observationMatch);
+//     console.log('Thought:', thoughtMatch);
+  
+//     if (!observationMatch || !thoughtMatch || !actionMatch || !summaryMatch) {
+//       console.error('Failed to match one or more patterns:', {
+//         observationMatch: !!observationMatch,
+//         thoughtMatch: !!thoughtMatch,
+//         actionMatch: !!actionMatch,
+//         summaryMatch: !!summaryMatch,
+//       });
+//       console.error('Raw response:', rsp);
+//       return null;
+//     }
+
+//     // 각 섹션의 내용을 트림하여 반환
+//     return {
+//       observation: observationMatch[1].trim(),
+//       thought: thoughtMatch[1].trim(),
+//       action: actionMatch[1].trim(),
+//       summary: summaryMatch[1].trim(),
+//     };
+//   } catch (error) {
+//     console.error('Error in parseModelResponse:', error);
+//     return null;
+//   }
+// }
 
 export async function getFrameImageBase64(node: SceneNode): Promise<string> {
   const imageBytes = await node.exportAsync({ format: 'JPG' });
@@ -584,4 +653,23 @@ export function createTaskDescFrame(taskData: TaskData) {
   }
 
   return frame;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function parseAction(action: string) {
+  try {
+    const actMatch = action.match(/(\w+)\((.*)\)/);
+    if (!actMatch) {
+      throw new Error('Invalid action format');
+    }
+
+    const [_, actName, args] = actMatch;
+    return { actName, args };
+  } catch (error) {
+    console.error('Error in parseAction:', error);
+    return { actName: 'FINISH', args: '' };
+  }
 }

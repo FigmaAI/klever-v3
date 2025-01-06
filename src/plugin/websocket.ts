@@ -1,4 +1,6 @@
 export class WebSocketClient {
+    // WebSocket 상태 상수 정의
+    private static readonly CLOSED = 3;
     private static instance: WebSocketClient;
     private ws: WebSocket | null = null;
     private listeners: ((response: any) => void)[] = [];
@@ -12,8 +14,8 @@ export class WebSocketClient {
         return WebSocketClient.instance;
     }
 
-    get readyState(): number | undefined {
-        return this.ws?.readyState;
+    get readyState(): number {
+        return this.ws?.readyState ?? WebSocketClient.CLOSED;
     }
 
     send(data: any): void {

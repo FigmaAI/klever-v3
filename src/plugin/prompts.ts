@@ -16,10 +16,6 @@ export function createPromptForTask(taskData: TaskData): string {
   } else {
     prompt = prompt.replace('<persona_description>', '');
   }
-
-  // (temp) Replace <last_act> in prompt with None
-  prompt = prompt.replace('<last_act>', 'None');
-
   return prompt;
 }
 

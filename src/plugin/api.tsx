@@ -8,6 +8,7 @@ export class AIModel {
   modelType: string;
   baseUrl: string;
   apiKey: string;
+  maxRounds: number;
 
   constructor(config: AIModelConfig) {
     this.model = config.model;
@@ -16,6 +17,7 @@ export class AIModel {
     this.modelType = config.modelType;
     this.baseUrl = config.baseUrl;
     this.apiKey = config.apiKey;
+    this.maxRounds = config.maxRounds;
   }
 
   async getModelResponse(prompt: string, images: string[]) {
@@ -37,7 +39,7 @@ export class AIModel {
               role: 'user',
               content: images.map((image) => ({
                 type: 'image_url',
-                image_url: { url: `data:image/jpeg;base64,${image}` },
+                image_url: { url: image }
               })),
             },
           ],
@@ -54,7 +56,6 @@ export class AIModel {
       }
 
       const content = data.choices[0].message.content;
-      console.log('Raw response content:', content);
       
       return content;
 
@@ -74,6 +75,7 @@ export async function createModelInstance() {
     maxTokens: config.MAX_TOKENS,
     modelType: config.MODEL,
     baseUrl: config.OPENAI_API_BASE,
-    apiKey: config.OPENAI_API_KEY
+    apiKey: config.OPENAI_API_KEY,
+    maxRounds: config.MAX_ROUNDS
   });
 } 

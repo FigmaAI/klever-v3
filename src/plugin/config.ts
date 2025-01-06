@@ -8,7 +8,8 @@ const defaultConfig: Config = {
   OPENAI_API_MODEL: "gpt-4o",  // The only OpenAI model by now that accepts visual input
   MAX_TOKENS: 300,  // The max token limit for the response completion
   TEMPERATURE: 0.0,  // The lower the value, the more consistent the output
-  REQUEST_INTERVAL: 10  // Time in seconds between consecutive GPT-4V requests
+  REQUEST_INTERVAL: 10,  // Time in seconds between consecutive GPT-4V requests
+  MAX_ROUNDS: 20  // Set the round limit for the agent to complete the task
 };
 
 // config 객체를 가져오는 비동기 함수

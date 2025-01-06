@@ -33,28 +33,36 @@ import {
   AutoAwesome,
   FaceRetouchingNatural,
   Delete,
-  Key,
+  Key
 } from '@mui/icons-material';
 import { Player } from '@lottiefiles/react-lottie-player';
 import Animation from '../assets/Animation.json';
 import { handlePluginError } from '../../utils/messageHandlers';
+import { WSMessage, InitResponse } from '../../typings/types';
 
 const App = () => {
   const [activeStep, setActiveStep] = React.useState(0);
+  const [data, setData] = React.useState<InitResponse | null>(null);
+  const dataRef = React.useRef<InitResponse | null>(null);
   const [url, setUrl] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [taskDesc, setTaskDesc] = React.useState('');
   const [openModal, setOpenModal] = React.useState(false);
   const [personaModalOpen, setPersonaModalOpen] = React.useState(false);
   const [personaDesc, setPersonaDesc] = React.useState('');
-  const [data, setData] = React.useState<any>(null);
   const [isConnecting, setIsConnecting] = React.useState(false);
   const [apiKeyModalOpen, setApiKeyModalOpen] = React.useState(false);
   const [apiKey, setApiKey] = React.useState('');
   const [currentApiKey, setCurrentApiKey] = React.useState<string>('');
   const ws = React.useRef<WebSocket | null>(null);
   const [currentRound, setCurrentRound] = React.useState(1);
+  const [loadingMessage, setLoadingMessage] = React.useState<string>('');
+  const [isInterviewing, setIsInterviewing] = React.useState(false);
 
+  React.useEffect(() => {
+    dataRef.current = data;
+    console.log('Data state updated:', data);
+  }, [data]);
 
   React.useEffect(() => {
     // API 키 상태 초기화
@@ -70,16 +78,17 @@ const App = () => {
 
     // WebSocket 메시지 수신 처리
     ws.current.onmessage = (event) => {
-      const response = JSON.parse(event.data);
-      console.log('WebSocket response:', response);
+      const response = JSON.parse(event.data) as WSMessage;
 
-      if (response.type === 'INIT') {
+      if (response.type === "INIT") {
         setIsConnecting(false);
-        if (response.status === 'success') {
+        if (response.status === 'success' && response.payload) {
+          const initResponse = response.payload as InitResponse;
+          setData(initResponse);
           setActiveStep(1);
-          setData(response.payload);
         } else {
-          handlePluginError(response.payload.message || 'Initialization failed');
+          const errorMessage = response.payload?.message || 'Initialization failed';
+          handlePluginError(errorMessage);
         }
       }
     };
@@ -91,12 +100,55 @@ const App = () => {
       handlePluginError('WebSocket connection error');
     };
 
-    // 플러그인으로부터의 메시지 처리
-    window.onmessage = (event) => {
+    // 플러그인 메시지 처리
+    const handlePluginMessage = (event) => {
       if (event.data.pluginMessage) {
         const msg = event.data.pluginMessage;
-        if (msg.type === 'currentApiKey') {
-          console.log('Setting current API key:', msg.message); // 디버깅 로그 추가
+
+        if (msg.type === 'execute-action') {
+          console.log('Received execute-action:', msg.payload);
+          if (dataRef.current?.screenshotArea) {
+            const { x: offsetX, y: offsetY } = dataRef.current.screenshotArea;
+            const bbox = msg.payload.bbox;
+            
+            // Calculate absolute center coordinates
+            const centerX = offsetX + bbox.x + (bbox.width / 2);
+            const centerY = offsetY + bbox.y + (bbox.height / 2);
+
+            // Send to Selenium with absolute coordinates
+            ws.current?.send(JSON.stringify({
+              type: 'EXECUTE_ACTION',
+              payload: {
+                action: msg.payload.action,
+                centerX,
+                centerY,
+                ...(msg.payload.action === 'swipe' && {
+                  direction: msg.payload.direction,
+                  distance: msg.payload.distance
+                })
+              }
+            }));
+          }
+        } else if (msg.type === 'websocket-message') {
+          const response = JSON.parse(msg.data);
+          if (response.type === 'EXECUTE_ACTION' && response.status === 'success') {
+            // 액션 실행 완료 후 스크린샷 요청
+            ws.current?.send(JSON.stringify({
+              type: 'GET_SCREENSHOT',
+              payload: {
+                prefix: `${currentRound}_after`
+              }
+            }));
+          }
+        } else if (msg.type === 'loading') {
+          if (msg.payload.loading) {
+            setLoadingMessage(msg.payload.message);
+            setActiveStep(2);
+          } else {
+            setLoadingMessage('');
+            setIsInterviewing(false);
+          }
+        } else if (msg.type === 'currentApiKey') {
           setCurrentApiKey(msg.message);
         } else if (msg.type === 'websocket-send' && ws.current) {
           ws.current.send(JSON.stringify(msg.data));
@@ -106,7 +158,10 @@ const App = () => {
       }
     };
 
+    window.addEventListener('message', handlePluginMessage);
+
     return () => {
+      window.removeEventListener('message', handlePluginMessage);
       if (ws.current) {
         ws.current.close();
       }
@@ -128,7 +183,10 @@ const App = () => {
 
   const handleExplore = async () => {
     if (!ws.current) return;
+    setIsInterviewing(true);  // 인터뷰 시작
     setIsConnecting(true);
+    setActiveStep(2);
+    setLoadingMessage('Starting exploration...');
 
     try {
       ws.current.send(JSON.stringify({
@@ -157,13 +215,12 @@ const App = () => {
                   screenshotInfo: {
                     nodeId: response.payload.nodeId,
                     imageData: response.payload.imageData,
-                    round: currentRound
                   }
                 }
               }
             }, '*');
           } else {
-            handlePluginError(response.payload.message || 'Screenshot capture failed');
+            setLoadingMessage(`Error: ${response.payload.message || 'Screenshot capture failed'}`);
             setIsConnecting(false);
           }
         }
@@ -171,8 +228,9 @@ const App = () => {
 
       ws.current.addEventListener('message', handleScreenshotResponse);
     } catch (error) {
+      setIsInterviewing(false);  // 에러 시 상태 초기화
       console.error('Error in handleExplore:', error);
-      handlePluginError('Failed to process exploration');
+      setLoadingMessage(`Error: ${error.message || 'Failed to process exploration'}`);
       setIsConnecting(false);
     }
   };
@@ -204,8 +262,8 @@ const App = () => {
     setUrl('');
     setPassword('');
     setIsConnecting(false);
-    setData(null);
     setCurrentRound(1);
+    setData(null);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -239,6 +297,19 @@ const App = () => {
   const handleCloseApiKeyModal = () => {
     setApiKeyModalOpen(false);
     setApiKey(''); // 입력 필드 초기화
+  };
+
+  const handleStopInterview = () => {
+    parent.postMessage({
+      pluginMessage: { type: 'stopInterview' }
+    }, '*');
+    setIsInterviewing(false);
+    setLoadingMessage('Stopping interview...');
+
+    // 잠시 후 초기 상태로 리셋
+    setTimeout(() => {
+      handleConfirmBack(); // 기존의 리셋 로직 재사용
+    }, 2000); // 2초 후에 리셋 실행 (사용자가 'Stopping interview...' 메시지를 볼 수 있도록)
   };
 
   return (
@@ -480,30 +551,27 @@ const App = () => {
                 </CardOverflow>
 
                 {activeStep === 2 && (
-                  <>
-                    <CardContent>
-                      {data ? (
-                        <>
-                          <Player autoplay loop src={Animation} style={{ height: '160px', width: '160px' }} />
-                          <Typography
-                            component="pre"
-                            level="body-sm"
-                            color="neutral"
-                            style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}
-                          >
-                            {data.message}
-                          </Typography>
-                        </>
-                      ) : (
-                        <>
-                          <Player autoplay loop src={Animation} style={{ height: '160px', width: '160px' }} />
-                          <Typography component="pre" level="body-sm">
-                            &nbsp;
-                          </Typography>
-                        </>
+                  <CardContent>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                      <Player
+                        autoplay
+                        loop
+                        src={Animation}
+                        style={{ height: '200px', width: '200px' }}
+                      />
+                      <Typography level="body-md">{loadingMessage}</Typography>
+                      {isInterviewing && (
+                        <Button
+                          color="danger"
+                          variant="solid"
+                          onClick={handleStopInterview}
+                          sx={{ mt: 2 }}
+                        >
+                          Stop Interview
+                        </Button>
                       )}
-                    </CardContent>
-                  </>
+                    </Box>
+                  </CardContent>
                 )}
               </Card>
             </Step>

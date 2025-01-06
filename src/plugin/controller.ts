@@ -1,92 +1,27 @@
-import type { ImageDimensions, PluginMessage, ScreenshotInfo, TaskData } from '../typings/types';
+import type { PluginMessage, ScreenshotInfo } from '../typings/types';
 import {
   loadFonts,
   errorMessageHandler,
   createTaskFrameWithNameAndDesc,
-  getFrameImageBase64,
-  getGenerateReportPrompt,
-  generateReportResult,
+  createPreviewAndImageFrames,
+  createAnatomyFrame,
+  parseExploreRsp,
+  createModelResponseFrame,
+  createActionImageFrame,
+  parseAction,
 } from './FigmaUtils';
-import { createModelInstance } from './api';
+import { AIModel, createModelInstance } from './api';
+import { createPromptForTask } from './prompts';
 import { WebSocketClient } from './websocket';
-
-// Create model instance
-let modelInstance = createModelInstance();
-
-console.log('Initial modelInstance:', modelInstance);
 
 figma.showUI(__html__, { width: 480, height: 640 });
 
 const ws = WebSocketClient.getInstance();
 
-async function generateReport(taskData: TaskData, screenshotInfo: ScreenshotInfo, dimension?: ImageDimensions) {
+const requestAIModelAndProcessResponse = async (prompt: string, screenshotInfo: ScreenshotInfo, modelInstance: AIModel) => {
   try {
-    // set loading
-    figma.ui.postMessage({ type: 'loading', message: true });
-
-    // 1. load data
-    await loadFonts();
-
-    // 2. create task frame
-    const taskFrame = await createTaskFrameWithNameAndDesc(taskData);
-
-    // send taskFrame as a reportNode to the UI
-    figma.ui.postMessage({ type: 'reportNode', message: taskFrame.id });
-
-    // load dimensions if it is not provided
-    if (!dimension) {
-      dimension = await figma.clientStorage.getAsync('dimensions');
-    }
-
-    // 3. create report
-    const { prompt, previewFrameId, beforeImageFrameId, labeledImageFrameId, elemList } = await getGenerateReportPrompt(
-      taskData,
-      taskFrame,
-      screenshotInfo,
-      dimension
-    );
-
-    // 4. Get AI response
-    const response = await requestAIModelAndProcessResponse(prompt, labeledImageFrameId);
-
-    if (response) {
-      await generateReportResult(
-        response,
-        previewFrameId,
-        beforeImageFrameId,
-        elemList,
-        screenshotInfo,
-        taskFrame
-      );
-    } else {
-      errorMessageHandler('Failed to get response from AI');
-    }
-
-    // 5. turn off loading
-    figma.ui.postMessage({ type: 'loading', message: false });
-    figma.notify('Report generated successfully', { timeout: 3000 });
-  } catch (error) {
-    figma.ui.postMessage({ type: 'loading', message: false });
-    console.error(error);
-    errorMessageHandler(error.message || 'An unexpected error occurred');
-  }
-}
-
-const requestAIModelAndProcessResponse = async (prompt: string, imageId: string) => {
-  try {
-    // Create new instance for each request
-    const modelInstance = await createModelInstance();
-    console.log('Created new modelInstance:', modelInstance);
-
-    if (typeof modelInstance?.getModelResponse !== 'function') {
-      console.error('modelInstance details:', {
-        isPromise: modelInstance instanceof Promise,
-        properties: Object.keys(modelInstance || {})
-      });
-      throw new Error('modelInstance.getModelResponse is not a function');
-    }
-
-    const imageBase64 = await getFrameImageBase64(await figma.getNodeByIdAsync(imageId) as SceneNode);
+   
+    const imageBase64 = screenshotInfo.imageData;
     const response = await modelInstance.getModelResponse(prompt, [imageBase64]);
     return response;
   } catch (error) {
@@ -96,13 +31,13 @@ const requestAIModelAndProcessResponse = async (prompt: string, imageId: string)
   }
 };
 
+let isInterviewStopped = false;
+
 // UI로부터의 메시지 처리
 figma.ui.onmessage = async (msg: PluginMessage) => {
   if (msg.type === 'init') {
     try {
       const { url, password } = msg;
-      console.log('Received URL:', url);
-
       // Extract starting-point-node-id from URL
       const startingNodeMatch = url.match(/starting-point-node-id=([^&]+)/);
       console.log('Starting node match result:', startingNodeMatch);
@@ -113,11 +48,9 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
       // Convert nodeId format and decode URI component
       const nodeId = decodeURIComponent(startingNodeMatch[1]).replace('-', ':');
-      console.log('Converted starting nodeId:', nodeId);
 
       // 1. Get the node using nodeId
       const node = await figma.getNodeByIdAsync(nodeId);
-      console.log('Retrieved node:', node);
 
       if (!node || !('absoluteBoundingBox' in node)) {
         console.error('Node or bounding box not found:', {
@@ -170,10 +103,160 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
       figma.notify('Failed to initialize: ' + error.message, { error: true });
     }
   } else if (msg.type === 'submit') {
-    const { taskData, screenshotInfo } = msg.data;
-    const dimensions = await figma.clientStorage.getAsync('dimensions');
-    console.log('Received from UI:', msg.data);
-    await generateReport(taskData, screenshotInfo, dimensions);
+    try {
+      isInterviewStopped = false;
+      // set metadata
+      const { taskData, screenshotInfo } = msg.data;
+      console.log('Received from UI:', msg.data);
+      const dimensions = await figma.clientStorage.getAsync('dimensions');
+      let round_count = 0;
+      let useless_list = [];
+      let last_act = 'None';
+      let task_complete = false;
+
+      // set loading
+      figma.ui.postMessage({
+        type: 'loading',
+        payload: { loading: true, message: 'preparing an interview...' }
+      });
+
+      // 1. load data
+      await loadFonts();
+
+      // 2. create task frame
+      const taskFrame = await createTaskFrameWithNameAndDesc(taskData);
+
+      // Create new instance for each request
+      const modelInstance = await createModelInstance();
+      console.log(`Created new modelInstance for ${taskFrame.name}`, modelInstance);
+      // Move the taskFrame to the center of the viewport
+      figma.viewport.scrollAndZoomIntoView([taskFrame]);
+      // send taskFrame to the UI
+      figma.ui.postMessage({
+        type: 'loading',
+        payload: { loading: true, message: 'Start interviewing...' }
+      });
+
+      // Create anatomy frame
+      const anatomyFrame = createAnatomyFrame();
+      taskFrame.appendChild(anatomyFrame);
+
+      // For loop for the rounds of interviewing
+      while (round_count < modelInstance.maxRounds && !isInterviewStopped) {
+        round_count += 1;
+        
+        // create frames for the task and the image
+        const { previewFrame, elemList } = await createPreviewAndImageFrames(
+          anatomyFrame,
+          screenshotInfo,
+          dimensions,
+          round_count
+        );
+
+        // scroll to the preview frame
+        figma.viewport.scrollAndZoomIntoView([previewFrame]);
+
+        // Send loading message to UI
+        figma.ui.postMessage({
+          type: 'loading',
+          payload: { loading: true, message: `Starting round ${round_count}...` }
+        });
+
+        // Create prompt and ask for AppAgent
+        let prompt = createPromptForTask(taskData);
+        prompt = prompt.replace('<last_act>', last_act);
+        const response = await requestAIModelAndProcessResponse(prompt, screenshotInfo, modelInstance);
+
+        if (response) {
+          const res = await parseExploreRsp(JSON.stringify(response));
+
+          // create frames
+          const modelResponseFrame = createModelResponseFrame(res.observation, res.thought, res.action, res.summary);
+          const actionImageFrame = await createActionImageFrame(res.action, elemList, screenshotInfo, round_count);
+
+          // add frames to preview
+          previewFrame.appendChild(actionImageFrame);
+          previewFrame.appendChild(modelResponseFrame);
+          
+          // Scroll to the preview frame
+          figma.viewport.scrollAndZoomIntoView([previewFrame]);
+          
+          // Send loading message to UI
+          figma.ui.postMessage({
+            type: 'loading',
+            payload: { loading: true, message: 'Thinking about what to do in the next step...' }
+          });
+          
+          // Parse action details
+          const actionDetails = parseAction(res.action);
+          const actName = actionDetails.actName;
+          last_act = res.summary;
+          
+          if (actName === "FINISH") {
+            task_complete = true;
+            break;
+          }
+
+          if (["tap", "long_press", "swipe"].includes(actName)) {
+            try {
+              // Get args from the action parsing result
+              const { actName, args } = parseAction(res.action);
+              const [areaNum, ...rest] = args.split(',').map(arg => arg.trim());
+              const area = parseInt(areaNum) - 1;
+              
+              if (isNaN(area) || area < 0) {
+                throw new Error('Invalid area number');
+              }
+
+              // Get the element's bounding box
+              const elem = elemList[area];
+              if (!elem) {
+                throw new Error(`Element not found at index ${area}`);
+              }
+
+              // Send the action to UI for execution
+              figma.ui.postMessage({
+                type: 'execute-action',
+                payload: {
+                  action: actName,
+                  bbox: elem.bbox,
+                  ...(actName === 'swipe' && {
+                    direction: rest[0],
+                    distance: rest[1] || 'medium'
+                  })
+                }
+              });
+
+            } catch (error) {
+              console.error('Error executing action:', error);
+              figma.notify('Failed to execute action: ' + error.message, { error: true });
+            }
+          }
+          
+        } else {
+          errorMessageHandler('Failed to get response from AI');
+        }
+      }
+
+      // 중단된 경우 메시지 표시
+      if (isInterviewStopped) {
+        figma.notify('Interview stopped by user', { timeout: 3000 });
+      }
+
+      // 로딩 상태 해제
+      figma.ui.postMessage({ 
+        type: 'loading', 
+        payload: { loading: false, message: '' }
+      });
+
+      // 5. turn off loading
+      figma.ui.postMessage({ type: 'loading', message: false });
+      figma.notify('Report generated successfully', { timeout: 3000 });
+    } catch (error) {
+      figma.ui.postMessage({ type: 'loading', message: false });
+      console.error(error);
+      errorMessageHandler(error.message || 'An unexpected error occurred');
+    }
   } else if (msg.type === 'saveApiKey') {
     const apiKey: string = msg.data;
     await figma.clientStorage.setAsync('openai-api-key', apiKey);
@@ -186,6 +269,9 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
   } else if (msg.type === 'getCurrentApiKey') {
     const apiKey = await figma.clientStorage.getAsync('openai-api-key');
     figma.ui.postMessage({ type: 'currentApiKey', message: apiKey || '' });
+  } else if (msg.type === 'stopInterview') {
+    isInterviewStopped = true;
+    figma.notify('Stopping interview...', { timeout: 2000 });
   }
 };
 
