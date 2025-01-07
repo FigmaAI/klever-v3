@@ -363,13 +363,15 @@ const App = () => {
 
         if (["tap", "long_press", "swipe"].includes(actName)) {
           try {
-
             const { area, rest } = parseAreaNumber(args);
-
-            // Get the element's bounding box
             const elem = elemList[area];
+            
             if (!elem) {
               throw new Error(`Element not found at index ${area}`);
+            }
+
+            if (!data?.screenshotArea) {
+              throw new Error('Screenshot area not initialized');
             }
 
             // Send the action to WebSocket for execution
@@ -379,17 +381,17 @@ const App = () => {
                 payload: {
                   action: actName,
                   bbox: elem.bbox,
+                  screenshotArea: data.screenshotArea,  // InitResponse에서 받은 screenshotArea 추가
                   ...(actName === 'swipe' && {
-                    direction: rest[0],
+                    direction: rest[0]?.toLowerCase(),
                     distance: rest[1] || 'medium'
                   })
                 }
               }));
-            } else {
-              console.error('WebSocket connection not available');
-              throw new Error('WebSocket connection not available');
-            }
 
+              // 액션 실행 후 잠시 대기
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
           } catch (error) {
             console.error('Error executing action:', error);
             figma.notify('Failed to execute action: ' + error.message, { error: true });
@@ -474,89 +476,127 @@ const App = () => {
         reflectionPrompt = reflectionPrompt.replace('<task_desc>', taskData.taskDesc);
         reflectionPrompt = reflectionPrompt.replace('<last_act>', lastAct || 'None');
 
-        const reflectionResponse = await modelInstance.getModelResponse(reflectionPrompt, [previewData.labeledImageFrameBase64, reflectionData.labeledImageFrameBase64]);
+        const reflectionResponse = await modelInstance.getModelResponse(reflectionPrompt, [
+          previewData.labeledImageFrameBase64,
+          reflectionData.labeledImageFrameBase64
+        ]);
 
-        const { decision, thought } = await parseReflectRsp(JSON.stringify(reflectionResponse));
-        console.log('Parsed reflection response:', decision, thought);
-
-        parent.postMessage({
-          pluginMessage: {
-            type: 'parse-reflect-rsp',
-            payload: {
-              previewFrameId: previewData.previewFrameId,
-              decision,
-              thought,
-            }
-          }
-        }, '*');
-
-        if (decision === "ERROR") {
-          break;
+        if (!reflectionResponse) {
+          throw new Error('No response from AI model for reflection');
         }
-        if (decision === "INEFFECTIVE") {
-          console.log('Adding element to uselessList:', resource_id);
-          uselessList.add(resource_id);
-          lastAct = "None";
-        } else if (
-          decision === "BACK" ||
-          decision === "CONTINUE" ||
-          decision === "SUCCESS"
-        ) {
-          if (decision === "BACK" || decision === "CONTINUE") {
+
+        try {
+          const { decision, thought } = await parseReflectRsp(JSON.stringify(reflectionResponse));
+          console.log('Parsed reflection response:', { decision, thought });
+
+          if (!decision) {
+            console.warn('Invalid reflection decision, defaulting to CONTINUE');
+            // 기본값으로 CONTINUE 설정
+            parent.postMessage({
+              pluginMessage: {
+                type: 'parse-reflect-rsp',
+                payload: {
+                  previewFrameId: previewData.previewFrameId,
+                  decision: 'CONTINUE',
+                  thought: thought || 'Unable to determine changes, continuing exploration'
+                }
+              }
+            }, '*');
+          } else {
+            parent.postMessage({
+              pluginMessage: {
+                type: 'parse-reflect-rsp',
+                payload: {
+                  previewFrameId: previewData.previewFrameId,
+                  decision,
+                  thought
+                }
+              }
+            }, '*');
+          }
+
+          // decision 처리 로직
+          if (decision === "ERROR") {
+            break;
+          }
+          if (decision === "INEFFECTIVE") {
             console.log('Adding element to uselessList:', resource_id);
             uselessList.add(resource_id);
             lastAct = "None";
-            if (decision === "BACK") {
-              // TODO: Handle back action
-              if (ws.current) {
-                ws.current.send(JSON.stringify({
-                  type: 'BACK',
-                  payload: {}
-                }));
+          } else if (
+            decision === "BACK" ||
+            decision === "CONTINUE" ||
+            decision === "SUCCESS"
+          ) {
+            if (decision === "BACK" || decision === "CONTINUE") {
+              console.log('Adding element to uselessList:', resource_id);
+              uselessList.add(resource_id);
+              lastAct = "None";
+              if (decision === "BACK") {
+                // TODO: Handle back action
+                if (ws.current) {
+                  ws.current.send(JSON.stringify({
+                    type: 'BACK',
+                    payload: {}
+                  }));
+                }
               }
             }
           }
-        }
 
-        // 다음 라운드에서 uselessList를 고려하여 prompt 수정
-        prompt = createPromptForTask(taskData);
-        prompt = prompt.replace('<last_act>', lastAct);
-        // uselessList 정보를 prompt에 추가
-        if (uselessList.size > 0) {
-          prompt += `\nPreviously ineffective elements: ${Array.from(uselessList).join(', ')}`;
-        }
+          // 다음 라운드에서 uselessList를 고려하여 prompt 수정
+          prompt = createPromptForTask(taskData);
+          prompt = prompt.replace('<last_act>', lastAct);
+          // uselessList 정보를 prompt에 추가
+          if (uselessList.size > 0) {
+            prompt += `\nPreviously ineffective elements: ${Array.from(uselessList).join(', ')}`;
+          }
 
-        // 노드가 변경되었다면 캐시 초기화
-        if (afterScreenshot.nodeId !== beforeScreenshot.nodeId) {
-          console.log('Node changed:', {
-            from: beforeScreenshot.nodeId,
-            to: afterScreenshot.nodeId,
-            cacheBefore: Array.from(nodeElemListCache.current.keys())
+          // 노드가 변경되었다면 캐시 초기화
+          if (afterScreenshot.nodeId !== beforeScreenshot.nodeId) {
+            console.log('Node changed:', {
+              from: beforeScreenshot.nodeId,
+              to: afterScreenshot.nodeId,
+              cacheBefore: Array.from(nodeElemListCache.current.keys())
+            });
+            nodeElemListCache.current.delete(beforeScreenshot.nodeId);
+            console.log('Cache after node change:', Array.from(nodeElemListCache.current.keys()));
+          }
+
+          // 액션 파싱 결과 로깅
+          console.log('Action parsed:', {
+            actName,
+            args,
+            selectedElement: elemList[area],
+            elementId: resource_id
           });
-          nodeElemListCache.current.delete(beforeScreenshot.nodeId);
-          console.log('Cache after node change:', Array.from(nodeElemListCache.current.keys()));
+
+          // uselessList 업데이트 로깅
+          if (decision === "INEFFECTIVE" || decision === "BACK" || decision === "CONTINUE") {
+            console.log('Adding to uselessList:', {
+              elementId: resource_id,
+              elementInfo: elemList[area],
+              reason: decision
+            });
+            uselessList.add(resource_id);
+            console.log('Updated uselessList:', Array.from(uselessList));
+          }
+
+          round++;
+        } catch (error) {
+          console.error('Error parsing reflection response:', error);
+          // 에러 발생 시 CONTINUE로 처리
+          parent.postMessage({
+            pluginMessage: {
+              type: 'parse-reflect-rsp',
+              payload: {
+                previewFrameId: previewData.previewFrameId,
+                decision: 'CONTINUE',
+                thought: 'Error parsing reflection response, continuing exploration'
+              }
+            }
+          }, '*');
         }
-
-        // 액션 파싱 결과 로깅
-        console.log('Action parsed:', {
-          actName,
-          args,
-          selectedElement: elemList[area],
-          elementId: resource_id
-        });
-
-        // uselessList 업데이트 로깅
-        if (decision === "INEFFECTIVE" || decision === "BACK" || decision === "CONTINUE") {
-          console.log('Adding to uselessList:', {
-            elementId: resource_id,
-            elementInfo: elemList[area],
-            reason: decision
-          });
-          uselessList.add(resource_id);
-          console.log('Updated uselessList:', Array.from(uselessList));
-        }
-
-        round++;
       }
 
       setLoadingMessage('Exploration complete!');
@@ -594,12 +634,7 @@ const App = () => {
       }));
     }
     setConfirmResetModalOpen(false);
-  };
-
-  const handleConfirmStop = () => {
-    setIsInterviewing(false);
     setConfirmStopModalOpen(false);
-    setActiveStep(1);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -714,7 +749,7 @@ const App = () => {
                   isInterviewing={isInterviewing}
                   loadingMessage={loadingMessage}
                   onBack={handleBack}
-                  onStop={() => setConfirmStopModalOpen(true)}
+                  onReset={handleConfirmReset}
                 />
               )}
             </Step>
@@ -732,7 +767,7 @@ const App = () => {
         <ConfirmModal
           open={confirmStopModalOpen}
           onClose={() => setConfirmStopModalOpen(false)}
-          onConfirm={handleConfirmStop}
+          onConfirm={handleConfirmReset}
           title="Stop Confirmation"
           content="Are you sure you want to stop the current exploration?"
         />

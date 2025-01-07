@@ -14,14 +14,14 @@ interface ReportStepProps {
   isInterviewing: boolean;
   loadingMessage: string;
   onBack: () => void;
-  onStop: () => void;
+  onReset: () => void;
 }
 
 export const ReportStep = ({
   isInterviewing,
   loadingMessage,
   onBack,
-  onStop
+  onReset
 }: ReportStepProps) => (
   <Card variant="outlined" sx={{ backgroundColor: 'white' }}>
     <CardOverflow
@@ -57,7 +57,7 @@ export const ReportStep = ({
           <Button
             color="danger"
             variant="solid"
-            onClick={onStop}
+            onClick={onReset}
             sx={{ mt: 2 }}
           >
             Stop Interview

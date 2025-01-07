@@ -438,7 +438,7 @@ function createTouchPoint(selectedElem: UIElement): EllipseNode {
 function createUTReportsFrame(): FrameNode {
   const frame = figma.createFrame();
   frame.name = 'UT Reports';
-  frame.layoutMode = 'VERTICAL';
+  frame.layoutMode = 'HORIZONTAL';
   frame.itemSpacing = 32;
   frame.paddingTop = frame.paddingBottom = frame.paddingLeft = frame.paddingRight = 32;
   frame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];

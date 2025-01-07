@@ -57,8 +57,13 @@ export interface ExploreResponse {
 export interface InitResponse {
   fileKey: string;
   message: string;
-  width: number;
-  height: number;
+  taskDir: string;
+  screenshotArea: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
 }
 
 // 플러그인 메시지 타입
