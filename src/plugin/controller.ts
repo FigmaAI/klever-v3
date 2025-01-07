@@ -1,42 +1,29 @@
-import type { PluginMessage, ScreenshotInfo } from '../typings/types';
+import type { PluginMessage } from '../typings/types';
 import {
   loadFonts,
-  errorMessageHandler,
   createTaskFrameWithNameAndDesc,
   createPreviewAndImageFrames,
   createAnatomyFrame,
-  parseExploreRsp,
   createModelResponseFrame,
   createActionImageFrame,
-  parseAction,
+  createReflectionResponseFrame,
+  getFrameImageBase64,
+  createElemList,
+  createReflectionFrames,
 } from './FigmaUtils';
-import { AIModel, createModelInstance } from './api';
-import { createPromptForTask } from './prompts';
+import { createModelInstance } from './api';
 import { WebSocketClient } from './websocket';
 
 figma.showUI(__html__, { width: 480, height: 640 });
 
 const ws = WebSocketClient.getInstance();
 
-const requestAIModelAndProcessResponse = async (prompt: string, screenshotInfo: ScreenshotInfo, modelInstance: AIModel) => {
-  try {
-   
-    const imageBase64 = screenshotInfo.imageData;
-    const response = await modelInstance.getModelResponse(prompt, [imageBase64]);
-    return response;
-  } catch (error) {
-    console.error('Error in requestAIModelAndProcessResponse:', error);
-    figma.notify('An error occurred while processing AI model response', { timeout: 3000 });
-    throw error;
-  }
-};
-
-let isInterviewStopped = false;
-
 // UI로부터의 메시지 처리
 figma.ui.onmessage = async (msg: PluginMessage) => {
   if (msg.type === 'init') {
     try {
+      await loadFonts();
+
       const { url, password } = msg;
       // Extract starting-point-node-id from URL
       const startingNodeMatch = url.match(/starting-point-node-id=([^&]+)/);
@@ -102,161 +89,7 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
       console.error('Initialization error:', error);
       figma.notify('Failed to initialize: ' + error.message, { error: true });
     }
-  } else if (msg.type === 'submit') {
-    try {
-      isInterviewStopped = false;
-      // set metadata
-      const { taskData, screenshotInfo } = msg.data;
-      console.log('Received from UI:', msg.data);
-      const dimensions = await figma.clientStorage.getAsync('dimensions');
-      let round_count = 0;
-      let useless_list = [];
-      let last_act = 'None';
-      let task_complete = false;
-
-      // set loading
-      figma.ui.postMessage({
-        type: 'loading',
-        payload: { loading: true, message: 'preparing an interview...' }
-      });
-
-      // 1. load data
-      await loadFonts();
-
-      // 2. create task frame
-      const taskFrame = await createTaskFrameWithNameAndDesc(taskData);
-
-      // Create new instance for each request
-      const modelInstance = await createModelInstance();
-      console.log(`Created new modelInstance for ${taskFrame.name}`, modelInstance);
-      // Move the taskFrame to the center of the viewport
-      figma.viewport.scrollAndZoomIntoView([taskFrame]);
-      // send taskFrame to the UI
-      figma.ui.postMessage({
-        type: 'loading',
-        payload: { loading: true, message: 'Start interviewing...' }
-      });
-
-      // Create anatomy frame
-      const anatomyFrame = createAnatomyFrame();
-      taskFrame.appendChild(anatomyFrame);
-
-      // For loop for the rounds of interviewing
-      while (round_count < modelInstance.maxRounds && !isInterviewStopped) {
-        round_count += 1;
-        
-        // create frames for the task and the image
-        const { previewFrame, elemList } = await createPreviewAndImageFrames(
-          anatomyFrame,
-          screenshotInfo,
-          dimensions,
-          round_count
-        );
-
-        // scroll to the preview frame
-        figma.viewport.scrollAndZoomIntoView([previewFrame]);
-
-        // Send loading message to UI
-        figma.ui.postMessage({
-          type: 'loading',
-          payload: { loading: true, message: `Starting round ${round_count}...` }
-        });
-
-        // Create prompt and ask for AppAgent
-        let prompt = createPromptForTask(taskData);
-        prompt = prompt.replace('<last_act>', last_act);
-        const response = await requestAIModelAndProcessResponse(prompt, screenshotInfo, modelInstance);
-
-        if (response) {
-          const res = await parseExploreRsp(JSON.stringify(response));
-
-          // create frames
-          const modelResponseFrame = createModelResponseFrame(res.observation, res.thought, res.action, res.summary);
-          const actionImageFrame = await createActionImageFrame(res.action, elemList, screenshotInfo, round_count);
-
-          // add frames to preview
-          previewFrame.appendChild(actionImageFrame);
-          previewFrame.appendChild(modelResponseFrame);
-          
-          // Scroll to the preview frame
-          figma.viewport.scrollAndZoomIntoView([previewFrame]);
-          
-          // Send loading message to UI
-          figma.ui.postMessage({
-            type: 'loading',
-            payload: { loading: true, message: 'Thinking about what to do in the next step...' }
-          });
-          
-          // Parse action details
-          const actionDetails = parseAction(res.action);
-          const actName = actionDetails.actName;
-          last_act = res.summary;
-          
-          if (actName === "FINISH") {
-            task_complete = true;
-            break;
-          }
-
-          if (["tap", "long_press", "swipe"].includes(actName)) {
-            try {
-              // Get args from the action parsing result
-              const { actName, args } = parseAction(res.action);
-              const [areaNum, ...rest] = args.split(',').map(arg => arg.trim());
-              const area = parseInt(areaNum) - 1;
-              
-              if (isNaN(area) || area < 0) {
-                throw new Error('Invalid area number');
-              }
-
-              // Get the element's bounding box
-              const elem = elemList[area];
-              if (!elem) {
-                throw new Error(`Element not found at index ${area}`);
-              }
-
-              // Send the action to UI for execution
-              figma.ui.postMessage({
-                type: 'execute-action',
-                payload: {
-                  action: actName,
-                  bbox: elem.bbox,
-                  ...(actName === 'swipe' && {
-                    direction: rest[0],
-                    distance: rest[1] || 'medium'
-                  })
-                }
-              });
-
-            } catch (error) {
-              console.error('Error executing action:', error);
-              figma.notify('Failed to execute action: ' + error.message, { error: true });
-            }
-          }
-          
-        } else {
-          errorMessageHandler('Failed to get response from AI');
-        }
-      }
-
-      // 중단된 경우 메시지 표시
-      if (isInterviewStopped) {
-        figma.notify('Interview stopped by user', { timeout: 3000 });
-      }
-
-      // 로딩 상태 해제
-      figma.ui.postMessage({ 
-        type: 'loading', 
-        payload: { loading: false, message: '' }
-      });
-
-      // 5. turn off loading
-      figma.ui.postMessage({ type: 'loading', message: false });
-      figma.notify('Report generated successfully', { timeout: 3000 });
-    } catch (error) {
-      figma.ui.postMessage({ type: 'loading', message: false });
-      console.error(error);
-      errorMessageHandler(error.message || 'An unexpected error occurred');
-    }
+    
   } else if (msg.type === 'saveApiKey') {
     const apiKey: string = msg.data;
     await figma.clientStorage.setAsync('openai-api-key', apiKey);
@@ -269,9 +102,188 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
   } else if (msg.type === 'getCurrentApiKey') {
     const apiKey = await figma.clientStorage.getAsync('openai-api-key');
     figma.ui.postMessage({ type: 'currentApiKey', message: apiKey || '' });
-  } else if (msg.type === 'stopInterview') {
-    isInterviewStopped = true;
-    figma.notify('Stopping interview...', { timeout: 2000 });
+  } else if (msg.type === 'create-task-frame') {
+    try {
+      const { taskDesc, personaDesc } = msg.data;
+
+      // 1. load fonts
+      await loadFonts();
+
+      // 2. create task frame
+      const taskFrame = await createTaskFrameWithNameAndDesc({
+        taskDesc,
+        personaDesc,
+      });
+
+      // 3. Create anatomy frame
+      const anatomyFrame = createAnatomyFrame();
+      taskFrame.appendChild(anatomyFrame);
+
+      // 4. Move the taskFrame to the center of the viewport
+      figma.viewport.scrollAndZoomIntoView([taskFrame]);
+
+      // 5. Send only anatomyFrameId back to UI
+      figma.ui.postMessage({
+        type: 'task-frame-created',
+        payload: {
+          anatomyFrameId: anatomyFrame.id,
+        },
+      });
+    } catch (error) {
+      console.error('Error creating task frame:', error);
+      figma.ui.postMessage({
+        type: 'error',
+        payload: {
+          message: 'Failed to create task frame: ' + error.message,
+        },
+      });
+    }
+  } else if (msg.type === 'get-model-instance') {
+    try {
+      const modelInstance = await createModelInstance();
+
+      // UI로 모델 인스턴스 직접 전송
+      figma.ui.postMessage({
+        type: 'model-instance-created',
+        payload: modelInstance,
+      });
+    } catch (error) {
+      console.error('Error creating model instance:', error);
+      figma.ui.postMessage({
+        type: 'error',
+        payload: {
+          message: 'Failed to create model instance: ' + error.message,
+        },
+      });
+    }
+  } else if (msg.type === 'create-preview-frames') {
+    try {
+      const { anatomyFrameId, roundCount, screenshotInfo, elemList } = msg.data;
+      const anatomyFrame = (await figma.getNodeByIdAsync(anatomyFrameId)) as FrameNode;
+
+      if (!anatomyFrame) {
+        throw new Error('Anatomy frame not found');
+      }
+
+      const dimensions = await figma.clientStorage.getAsync('dimensions');
+
+      const { previewFrame, labeledImageFrame } = await createPreviewAndImageFrames(
+        anatomyFrame,
+        screenshotInfo,
+        dimensions,
+        roundCount,
+        elemList
+      );
+
+      // scroll to the preview frame
+      figma.viewport.scrollAndZoomIntoView([previewFrame]);
+
+      // send preview frame to UI
+      const labeledImageFrameBase64 = await getFrameImageBase64(labeledImageFrame);
+      figma.ui.postMessage({
+        type: 'preview-frames-created',
+        payload: {
+          previewFrameId: previewFrame.id,
+          labeledImageFrameBase64: labeledImageFrameBase64,
+        },
+      });
+    } catch (error) {
+      console.error('Error creating preview frames:', error);
+      figma.ui.postMessage({
+        type: 'error',
+        payload: {
+          message: 'Failed to create preview frames: ' + error.message,
+        },
+      });
+    }
+  } else if (msg.type === 'parse-explore-rsp') {
+    const { previewFrameId, res, elemList, screenshotInfo, roundCount } = msg.payload;
+    const previewFrame = (await figma.getNodeByIdAsync(previewFrameId)) as FrameNode;
+    // create frames
+    const modelResponseFrame = createModelResponseFrame(res.observation, res.thought, res.action, res.summary);
+    const actionImageFrame = await createActionImageFrame(res.action, elemList, screenshotInfo, roundCount);
+
+    // add frames to preview
+    previewFrame.appendChild(actionImageFrame);
+    previewFrame.appendChild(modelResponseFrame);
+
+    // Scroll to the preview frame
+    figma.viewport.scrollAndZoomIntoView([previewFrame]);
+  } else if (msg.type === 'create-reflection-frame') {
+    try {
+      console.log('Received create-reflection-frame request:', msg.data);
+      const { previewFrameId, screenshotInfo, roundCount, elemList } = msg.data;
+      const dimensions = await figma.clientStorage.getAsync('dimensions');
+      const previewFrame = (await figma.getNodeByIdAsync(previewFrameId)) as FrameNode;
+      
+      if (!previewFrame) throw new Error('Preview frame not found');
+
+      const { labeledImageFrame } = await createReflectionFrames(
+        previewFrame,
+        screenshotInfo,
+        dimensions,
+        roundCount,
+        elemList
+      );
+
+      console.log('Getting frame image base64...');
+      const labeledImageFrameBase64 = await getFrameImageBase64(labeledImageFrame);
+      
+      console.log('Sending response to UI...');
+      figma.ui.postMessage({
+        type: 'reflection-frames-created',
+        payload: {
+          labeledImageFrameBase64: labeledImageFrameBase64,
+        },
+      });
+
+    } catch (error) {
+      console.error('Error creating reflection frames:', error);
+      figma.notify('Failed to create reflection frames: ' + error.message, { error: true });
+      figma.ui.postMessage({
+        type: 'error',
+        payload: {
+          message: 'Failed to create reflection frames: ' + error.message
+        }
+      });
+    }
+  } else if (msg.type === 'parse-reflect-rsp') {
+    const { previewFrameId, decision, thought } = msg.payload;
+    const previewFrame = (await figma.getNodeByIdAsync(previewFrameId)) as FrameNode;
+
+    if (!previewFrame) throw new Error('Preview frame not found');
+
+    const reflectionResponseFrame = createReflectionResponseFrame(decision, thought);
+    previewFrame.appendChild(reflectionResponseFrame);
+
+    // Scroll to the preview frame
+    figma.viewport.scrollAndZoomIntoView([previewFrame]);
+  } else if (msg.type === 'create-elem-list') {
+    try {
+      const { nodeId, uselessList } = msg;
+      const node = await figma.getNodeByIdAsync(nodeId) as SceneNode;
+      
+      if (!node) {
+        throw new Error('Node not found');
+      }
+
+      const elemList = await createElemList(node, uselessList);
+
+      figma.ui.postMessage({
+        type: 'elem-list-created',
+        payload: {
+          elemList
+        }
+      });
+    } catch (error) {
+      console.error('Error creating element list:', error);
+      figma.ui.postMessage({
+        type: 'error',
+        payload: {
+          message: 'Failed to create element list: ' + error.message
+        }
+      });
+    }
   }
 };
 

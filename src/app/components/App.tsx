@@ -2,43 +2,25 @@ import * as React from 'react';
 import { CssVarsProvider } from '@mui/joy/styles';
 import {
   Typography,
-  FormControl,
-  FormLabel,
-  Input,
   Button,
-  Stack,
   Stepper,
   Step,
   StepIndicator,
-  Textarea,
-  Modal,
-  ModalDialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Card,
-  CardContent,
-  CardActions,
-  CardOverflow,
-  Box,
-  ModalClose,
-  IconButton,
-  Link,
+  Box
 } from '@mui/joy';
 import {
-  CheckRounded,
   DesignServicesOutlined,
   AddLinkOutlined,
   PhotoFilterOutlined,
-  AutoAwesome,
-  FaceRetouchingNatural,
-  Delete,
   Key
 } from '@mui/icons-material';
-import { Player } from '@lottiefiles/react-lottie-player';
-import Animation from '../assets/Animation.json';
 import { handlePluginError } from '../../utils/messageHandlers';
-import { WSMessage, InitResponse } from '../../typings/types';
+import { WSMessage, InitResponse, WSMessageType, ScreenshotInfo, TaskData, UIElement, ErrorPayload, PreviewFramesResult, ReflectionFramesResult } from '../../typings/types';
+import { ApiKeyCard, InitStep, TaskStep, ReportStep } from './steps';
+import { ConfirmModal, PersonaModal, ApiKeyModal } from './modals';
+import { createPromptForTask, AIModel, parseExploreRsp, createPromptForReflection } from '../../plugin';
+import { parseAction, parseReflectRsp } from '../../plugin/FigmaUtils';
+
 
 const App = () => {
   const [activeStep, setActiveStep] = React.useState(0);
@@ -47,27 +29,33 @@ const App = () => {
   const [url, setUrl] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [taskDesc, setTaskDesc] = React.useState('');
-  const [openModal, setOpenModal] = React.useState(false);
+  const [confirmResetModalOpen, setConfirmResetModalOpen] = React.useState(false);
+  const [confirmStopModalOpen, setConfirmStopModalOpen] = React.useState(false);
   const [personaModalOpen, setPersonaModalOpen] = React.useState(false);
   const [personaDesc, setPersonaDesc] = React.useState('');
   const [isConnecting, setIsConnecting] = React.useState(false);
   const [apiKeyModalOpen, setApiKeyModalOpen] = React.useState(false);
   const [apiKey, setApiKey] = React.useState('');
   const [currentApiKey, setCurrentApiKey] = React.useState<string>('');
-  const ws = React.useRef<WebSocket | null>(null);
-  const [currentRound, setCurrentRound] = React.useState(1);
   const [loadingMessage, setLoadingMessage] = React.useState<string>('');
   const [isInterviewing, setIsInterviewing] = React.useState(false);
+  const ws = React.useRef<WebSocket | null>(null);
+  const [modelInstance, setModelInstance] = React.useState<AIModel | null>(null);
+  const nodeElemListCache = React.useRef<Map<string, UIElement[]>>(new Map());
 
   React.useEffect(() => {
     dataRef.current = data;
-    console.log('Data state updated:', data);
   }, [data]);
 
   React.useEffect(() => {
-    // API 키 상태 초기화
-    parent.postMessage({ pluginMessage: { type: 'getCurrentApiKey' } }, '*');
+    if (!currentApiKey) {
+      parent.postMessage({ pluginMessage: { type: 'getCurrentApiKey' } }, '*');
+    } else {
+      parent.postMessage({ pluginMessage: { type: 'get-model-instance' } }, '*');
+    }
+  }, [currentApiKey]);
 
+  React.useEffect(() => {
     // WebSocket 연결 설정
     ws.current = new WebSocket('ws://localhost:8080');
 
@@ -76,97 +64,70 @@ const App = () => {
       console.log('WebSocket connected');
     };
 
-    // WebSocket 메시지 수신 처리
-    ws.current.onmessage = (event) => {
-      const response = JSON.parse(event.data) as WSMessage;
-
-      if (response.type === "INIT") {
-        setIsConnecting(false);
-        if (response.status === 'success' && response.payload) {
-          const initResponse = response.payload as InitResponse;
-          setData(initResponse);
-          setActiveStep(1);
-        } else {
-          const errorMessage = response.payload?.message || 'Initialization failed';
-          handlePluginError(errorMessage);
-        }
-      }
-    };
-
-    // WebSocket 에러 처리
-    ws.current.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setIsConnecting(false);
-      handlePluginError('WebSocket connection error');
-    };
-
     // 플러그인 메시지 처리
     const handlePluginMessage = (event) => {
       if (event.data.pluginMessage) {
         const msg = event.data.pluginMessage;
 
-        if (msg.type === 'execute-action') {
-          console.log('Received execute-action:', msg.payload);
-          if (dataRef.current?.screenshotArea) {
-            const { x: offsetX, y: offsetY } = dataRef.current.screenshotArea;
-            const bbox = msg.payload.bbox;
-            
-            // Calculate absolute center coordinates
-            const centerX = offsetX + bbox.x + (bbox.width / 2);
-            const centerY = offsetY + bbox.y + (bbox.height / 2);
-
-            // Send to Selenium with absolute coordinates
-            ws.current?.send(JSON.stringify({
-              type: 'EXECUTE_ACTION',
-              payload: {
-                action: msg.payload.action,
-                centerX,
-                centerY,
-                ...(msg.payload.action === 'swipe' && {
-                  direction: msg.payload.direction,
-                  distance: msg.payload.distance
-                })
-              }
-            }));
-          }
-        } else if (msg.type === 'websocket-message') {
-          const response = JSON.parse(msg.data);
-          if (response.type === 'EXECUTE_ACTION' && response.status === 'success') {
-            // 액션 실행 완료 후 스크린샷 요청
-            ws.current?.send(JSON.stringify({
-              type: 'GET_SCREENSHOT',
-              payload: {
-                prefix: `${currentRound}_after`
-              }
-            }));
-          }
-        } else if (msg.type === 'loading') {
-          if (msg.payload.loading) {
-            setLoadingMessage(msg.payload.message);
-            setActiveStep(2);
-          } else {
-            setLoadingMessage('');
-            setIsInterviewing(false);
-          }
-        } else if (msg.type === 'currentApiKey') {
+        if (msg.type === 'currentApiKey') {
           setCurrentApiKey(msg.message);
-        } else if (msg.type === 'websocket-send' && ws.current) {
-          ws.current.send(JSON.stringify(msg.data));
-        } else if (msg.type === 'websocket-close' && ws.current) {
-          ws.current.close();
+        } else if (msg.type === 'model-instance-created') {
+          console.log('Creating model instance with config:', msg.payload);
+          const model = new AIModel(msg.payload);  // AIModel 인스턴스 직접 생성
+          setModelInstance(model);
+          console.log('Model instance created:', model);
+        } else if (msg.type === 'websocket-send') {
+          // WebSocket 메시지 전송 처리
+          if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+            console.log('Sending WebSocket message:', msg.data);
+            ws.current.send(JSON.stringify(msg.data));
+          } else {
+            console.error('WebSocket is not connected');
+            handlePluginError('WebSocket is not connected');
+          }
         }
       }
     };
 
-    window.addEventListener('message', handlePluginMessage);
+      // WebSocket 메시지 수신 처리
+      ws.current.onmessage = (event) => {
+        const response = JSON.parse(event.data) as WSMessage;
+        console.log('WebSocket message received:', response);
 
-    return () => {
-      window.removeEventListener('message', handlePluginMessage);
-      if (ws.current) {
-        ws.current.close();
-      }
-    };
-  }, []);
+        if (response.type === "INIT") {
+          setIsConnecting(false);
+          if (response.status === 'success' && response.payload) {
+            console.log('Init successful, setting activeStep to 1');
+            const initResponse = response.payload as InitResponse;
+            setData(initResponse);
+            setActiveStep(1);
+            
+            // modelInstance 초기화 상태 로깅 추가
+            console.log('Current modelInstance:', modelInstance);
+            
+            console.log('ActiveStep should now be 1');
+          } else {
+            console.log('Init failed:', response.payload);
+            const payload = response.payload as ErrorPayload;
+            const errorMessage = payload?.message || 'Initialization failed';
+            handlePluginError(errorMessage);
+          }
+        }
+      };
+
+      // WebSocket 에러 처리
+      ws.current.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setIsConnecting(false);
+        handlePluginError('WebSocket connection error');
+      };
+
+      window.addEventListener('message', handlePluginMessage);
+      return () => {
+        window.removeEventListener('message', handlePluginMessage);
+        ws.current?.close();
+      };
+    }, []);
 
   const handleInit = async () => {
     if (isConnecting) return;
@@ -181,89 +142,464 @@ const App = () => {
     }, '*');
   };
 
-  const handleExplore = async () => {
-    if (!ws.current) return;
-    setIsInterviewing(true);  // 인터뷰 시작
-    setIsConnecting(true);
-    setActiveStep(2);
-    setLoadingMessage('Starting exploration...');
+  const requestScreenshot = async (prefix: string): Promise<ScreenshotInfo> => {
+    return new Promise((resolve, reject) => {
+      if (!ws.current) return reject('No WebSocket connection');
 
-    try {
       ws.current.send(JSON.stringify({
-        type: 'GET_SCREENSHOT',
-        payload: {
-          prefix: `${currentRound}_before`,
-          round: currentRound
-        }
+        type: WSMessageType.GET_SCREENSHOT,
+        payload: { prefix }
       }));
 
-      const handleScreenshotResponse = (event: MessageEvent) => {
+      const handleResponse = (event: MessageEvent) => {
         const response = JSON.parse(event.data);
-
-        if (response.type === 'GET_SCREENSHOT') {
-          ws.current?.removeEventListener('message', handleScreenshotResponse);
-
+        if (response.type === WSMessageType.GET_SCREENSHOT) {
+          ws.current?.removeEventListener('message', handleResponse);
           if (response.status === 'success') {
-            parent.postMessage({
-              pluginMessage: {
-                type: 'submit',
-                data: {
-                  taskData: {
-                    taskDesc,
-                    personaDesc
-                  },
-                  screenshotInfo: {
-                    nodeId: response.payload.nodeId,
-                    imageData: response.payload.imageData,
-                  }
-                }
-              }
-            }, '*');
+            resolve(response.payload as ScreenshotInfo);
           } else {
-            setLoadingMessage(`Error: ${response.payload.message || 'Screenshot capture failed'}`);
-            setIsConnecting(false);
+            reject(response.payload?.message || 'Screenshot failed');
           }
         }
       };
 
-      ws.current.addEventListener('message', handleScreenshotResponse);
-    } catch (error) {
-      setIsInterviewing(false);  // 에러 시 상태 초기화
-      console.error('Error in handleExplore:', error);
-      setLoadingMessage(`Error: ${error.message || 'Failed to process exploration'}`);
-      setIsConnecting(false);
+      ws.current.addEventListener('message', handleResponse);
+    });
+  };
+
+  const parseAreaNumber = (args: string): { area: number; rest: string[] } => {
+    const [areaNum, ...rest] = args.split(',').map(arg => arg.trim());
+    const area = parseInt(areaNum) - 1;
+    if (isNaN(area) || area < 0) {
+      throw new Error('Invalid area number');
     }
+    return {
+      area: area,
+      rest: rest
+    };
   };
 
-  const handleBack = () => {
-    setOpenModal(true);
-  };
+  const handleExplore = async () => {
+    if (!ws.current) {
+      handlePluginError('WebSocket connection not available');
+      return;
+    }
 
-  const handleConfirmBack = () => {
+    if (!modelInstance) {
+      handlePluginError('AI model not initialized');
+      return;
+    }
+
+    setIsInterviewing(true);
+    setLoadingMessage('Creating frames...');
+    setActiveStep(2);
+
     try {
-      if (ws.current) {
-        ws.current.send(JSON.stringify({
-          type: 'CLOSE',
-          payload: {}
-        }));
-      }
-      resetState();
+      // 1. Create task frame and anatomy frame
+      parent.postMessage({
+        pluginMessage: {
+          type: 'create-task-frame',
+          data: {
+            taskDesc,
+            personaDesc
+          }
+        }
+      }, '*');
+
+      // 2. Wait for anatomyFrameId
+      const handleTaskFrameCreation = (event) => {
+        if (event.data.pluginMessage?.type === 'task-frame-created') {
+          const { anatomyFrameId } = event.data.pluginMessage.payload;
+          console.log('Anatomy frame created:', anatomyFrameId);
+          startExplorationRounds(anatomyFrameId);
+        } else if (event.data.pluginMessage?.type === 'error') {
+          throw new Error(event.data.pluginMessage.payload.message);
+        }
+      };
+
+      window.addEventListener('message', handleTaskFrameCreation);
+
     } catch (error) {
-      console.error('Failed to reset:', error);
-      handlePluginError('Failed to reset application state');
+      console.error('Error in exploration:', error);
+      setLoadingMessage(`Error: ${error.message}`);
+      setIsInterviewing(false);
     }
   };
 
+  const getElemList = async (nodeId: string, uselessList: Set<string>): Promise<UIElement[]> => {
+    console.log('Getting elemList:', {
+      nodeId,
+      uselessListSize: uselessList.size,
+      cacheHit: nodeElemListCache.current.has(nodeId)
+    });
 
+    return new Promise((resolve, reject) => {
+      if (nodeElemListCache.current.has(nodeId)) {
+        const cachedList = nodeElemListCache.current.get(nodeId)!;
+        const filteredList = cachedList.filter(elem => !uselessList.has(elem.id));
+        resolve(filteredList);
+        return;
+      }
+      
+      const handleElemListCreation = (event: MessageEvent) => {
+        if (event.data.pluginMessage?.type === 'elem-list-created') {
+          window.removeEventListener('message', handleElemListCreation);
+          const elemList = event.data.pluginMessage.payload.elemList;
+          const filteredList = elemList.filter(elem => !uselessList.has(elem.id));
+          nodeElemListCache.current.set(nodeId, elemList);
+          resolve(filteredList);
+        } else if (event.data.pluginMessage?.type === 'error') {
+          window.removeEventListener('message', handleElemListCreation);
+          reject(new Error(event.data.pluginMessage.payload.message));
+        }
+      };
+
+      window.addEventListener('message', handleElemListCreation);
+      
+      parent.postMessage({
+        pluginMessage: {
+          type: 'create-elem-list',
+          nodeId,
+          uselessList: Array.from(uselessList)
+        }
+      }, '*');
+    });
+  };
+
+  const startExplorationRounds = async (anatomyFrameId: string): Promise<void> => {
+    try {
+      let round = 1;
+      let taskComplete = false;
+      let lastAct = 'None';
+      const maxRounds = modelInstance?.maxRounds || 30;
+      const uselessList = new Set<string>();
+      
+      console.log('Starting exploration:', { round: 1, maxRounds });
+
+      while (!taskComplete && round <= maxRounds) {
+        // 1. Get initial screenshot
+        setLoadingMessage(`Round ${round}: Getting initial screenshot...`);
+        const beforeScreenshot = await requestScreenshot(`${round}_before`);
+        
+        // 2. Get elemList for current node
+        const elemList = await getElemList(beforeScreenshot.nodeId, uselessList);
+
+        // 3. Create preview frames
+        setLoadingMessage(`Round ${round}: Creating preview frame...`);
+        parent.postMessage({
+          pluginMessage: {
+            type: 'create-preview-frames',
+            data: {
+              anatomyFrameId,
+              roundCount: round,
+              screenshotInfo: beforeScreenshot,
+              elemList: elemList 
+            }
+          }
+        }, '*');
+
+        // Wait for preview frames to be created
+        const previewData = await new Promise<PreviewFramesResult>((resolve, reject) => {
+          const handlePreviewCreation = (event) => {
+            if (event.data.pluginMessage?.type === 'preview-frames-created') {
+              window.removeEventListener('message', handlePreviewCreation);
+              resolve(event.data.pluginMessage.payload);
+            } else if (event.data.pluginMessage?.type === 'error') {
+              window.removeEventListener('message', handlePreviewCreation);
+              reject(new Error(event.data.pluginMessage.payload.message));
+            }
+          };
+          window.addEventListener('message', handlePreviewCreation);
+        });
+
+        // 4. Create prompt and get AI response
+        setLoadingMessage(`Round ${round}: Getting AI response...`);
+        const taskData: TaskData = { taskDesc, personaDesc };
+
+        // Create prompt and ask for AppAgent
+        let prompt = createPromptForTask(taskData);
+        prompt = prompt.replace('<last_act>', lastAct);
+        const response = await modelInstance.getModelResponse(prompt, [previewData.labeledImageFrameBase64]);
+
+        if (!response) {
+          throw new Error('No response from AI model');
+        }
+        const res = await parseExploreRsp(JSON.stringify(response));
+        console.log('Parsed response:', res);
+
+        parent.postMessage({
+          pluginMessage: {
+            type: 'parse-explore-rsp',
+            payload: {
+              previewFrameId: previewData.previewFrameId,
+              res: res,
+              elemList: elemList,
+              screenshotInfo: beforeScreenshot,
+              roundCount: round,
+            }
+          }
+        }, '*');
+
+        // Parse action details
+        const { actName: initialActName, args } = parseAction(res.action);
+        let actName = initialActName;
+        lastAct = res.summary;
+
+        // if actName is swipe, change actName to v_swipe or h_swipe
+        if (actName === "swipe") {
+          const swipeDir = args.split(',')[1].trim();
+          if (swipeDir === "up" || swipeDir === "down") {
+            actName = "v_swipe";
+          } else if (swipeDir === "left" || swipeDir === "right") {
+            actName = "h_swipe";
+          }
+        }
+
+
+        if (actName === "FINISH") {
+          taskComplete = true;
+          break;
+        }
+
+        if (["tap", "long_press", "swipe"].includes(actName)) {
+          try {
+
+            const { area, rest } = parseAreaNumber(args);
+
+            // Get the element's bounding box
+            const elem = elemList[area];
+            if (!elem) {
+              throw new Error(`Element not found at index ${area}`);
+            }
+
+            // Send the action to WebSocket for execution
+            if (ws.current) {
+              ws.current.send(JSON.stringify({
+                type: WSMessageType.EXECUTE_ACTION,
+                payload: {
+                  action: actName,
+                  bbox: elem.bbox,
+                  ...(actName === 'swipe' && {
+                    direction: rest[0],
+                    distance: rest[1] || 'medium'
+                  })
+                }
+              }));
+            } else {
+              console.error('WebSocket connection not available');
+              throw new Error('WebSocket connection not available');
+            }
+
+          } catch (error) {
+            console.error('Error executing action:', error);
+            figma.notify('Failed to execute action: ' + error.message, { error: true });
+          }
+        }
+
+        // Set delay for 1 seconds
+        setLoadingMessage('Thinking about what to do in the next step...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+
+        setLoadingMessage(`Round ${round}: Reflecting result...`);
+        const afterScreenshot: ScreenshotInfo = await requestScreenshot(`${round}_after`)
+
+        // create reflection frame 
+        parent.postMessage({
+          pluginMessage: {
+            type: 'create-reflection-frame',
+            data: {
+              previewFrameId: previewData.previewFrameId,
+              screenshotInfo: afterScreenshot,
+              roundCount: round,
+              elemList: elemList
+            }
+          }
+        }, '*');
+
+        // wait for reflection frame to be created
+        const reflectionData: ReflectionFramesResult = await new Promise((resolve, reject) => {
+          const handleReflectionCreation = (event) => {
+            if (event.data.pluginMessage?.type === 'reflection-frames-created') {
+              window.removeEventListener('message', handleReflectionCreation);
+              resolve(event.data.pluginMessage.payload);
+            } else if (event.data.pluginMessage?.type === 'error') {
+              window.removeEventListener('message', handleReflectionCreation);
+              reject(new Error(event.data.pluginMessage.payload.message));
+            }
+          }
+          window.addEventListener('message', handleReflectionCreation);
+        });
+
+        console.log('Reflection data:', reflectionData);
+
+        // Create reflection AI prompt and get AI response
+        let reflectionPrompt = createPromptForReflection(taskData);
+
+        if (actName === "tap") {
+          reflectionPrompt = reflectionPrompt.replace('<action>', 'tapping');
+        } else if (actName === "text") {
+          continue;
+        } else if (actName === "long_press") {
+          reflectionPrompt = reflectionPrompt.replace('<action>', 'long pressing');
+        } else if (actName === "swipe") {
+          const swipeDir = res[2];
+          if (swipeDir === "up" || swipeDir === "down") {
+            actName = "v_swipe";
+          } else if (swipeDir === "left" || swipeDir === "right") {
+            actName = "h_swipe";
+          }
+          reflectionPrompt = reflectionPrompt.replace('<action>', 'swiping');
+        } else {
+          console.error("ERROR: Undefined act!");
+          break;
+        }
+
+        let area = parseAreaNumber(args).area;
+        let resource_id = elemList[area].id;
+
+        // 간단한 라운드 정보만 로깅
+        console.log('Round:', {
+          number: round,
+          action: actName,
+          elementId: resource_id,
+          uselessListSize: uselessList.size
+        });
+
+        if (resource_id) {
+          uselessList.add(resource_id);
+        }
+
+        reflectionPrompt = reflectionPrompt.replace('<ui_element>', area.toString());
+        reflectionPrompt = reflectionPrompt.replace('<task_desc>', taskData.taskDesc);
+        reflectionPrompt = reflectionPrompt.replace('<last_act>', lastAct || 'None');
+
+        const reflectionResponse = await modelInstance.getModelResponse(reflectionPrompt, [previewData.labeledImageFrameBase64, reflectionData.labeledImageFrameBase64]);
+
+        const { decision, thought } = await parseReflectRsp(JSON.stringify(reflectionResponse));
+        console.log('Parsed reflection response:', decision, thought);
+
+        parent.postMessage({
+          pluginMessage: {
+            type: 'parse-reflect-rsp',
+            payload: {
+              previewFrameId: previewData.previewFrameId,
+              decision,
+              thought,
+            }
+          }
+        }, '*');
+
+        if (decision === "ERROR") {
+          break;
+        }
+        if (decision === "INEFFECTIVE") {
+          console.log('Adding element to uselessList:', resource_id);
+          uselessList.add(resource_id);
+          lastAct = "None";
+        } else if (
+          decision === "BACK" ||
+          decision === "CONTINUE" ||
+          decision === "SUCCESS"
+        ) {
+          if (decision === "BACK" || decision === "CONTINUE") {
+            console.log('Adding element to uselessList:', resource_id);
+            uselessList.add(resource_id);
+            lastAct = "None";
+            if (decision === "BACK") {
+              // TODO: Handle back action
+              if (ws.current) {
+                ws.current.send(JSON.stringify({
+                  type: 'BACK',
+                  payload: {}
+                }));
+              }
+            }
+          }
+        }
+
+        // 다음 라운드에서 uselessList를 고려하여 prompt 수정
+        prompt = createPromptForTask(taskData);
+        prompt = prompt.replace('<last_act>', lastAct);
+        // uselessList 정보를 prompt에 추가
+        if (uselessList.size > 0) {
+          prompt += `\nPreviously ineffective elements: ${Array.from(uselessList).join(', ')}`;
+        }
+
+        // 노드가 변경되었다면 캐시 초기화
+        if (afterScreenshot.nodeId !== beforeScreenshot.nodeId) {
+          console.log('Node changed:', {
+            from: beforeScreenshot.nodeId,
+            to: afterScreenshot.nodeId,
+            cacheBefore: Array.from(nodeElemListCache.current.keys())
+          });
+          nodeElemListCache.current.delete(beforeScreenshot.nodeId);
+          console.log('Cache after node change:', Array.from(nodeElemListCache.current.keys()));
+        }
+
+        // 액션 파싱 결과 로깅
+        console.log('Action parsed:', {
+          actName,
+          args,
+          selectedElement: elemList[area],
+          elementId: resource_id
+        });
+
+        // uselessList 업데이트 로깅
+        if (decision === "INEFFECTIVE" || decision === "BACK" || decision === "CONTINUE") {
+          console.log('Adding to uselessList:', {
+            elementId: resource_id,
+            elementInfo: elemList[area],
+            reason: decision
+          });
+          uselessList.add(resource_id);
+          console.log('Updated uselessList:', Array.from(uselessList));
+        }
+
+        round++;
+      }
+
+      setLoadingMessage('Exploration complete!');
+    } catch (error) {
+      console.error('Error in exploration:', error);
+      setLoadingMessage(`Error: ${error.message}`);
+      setIsInterviewing(false);
+    }
+  };
 
   const resetState = () => {
-    setOpenModal(false);
+    setConfirmResetModalOpen(false);
+    setConfirmStopModalOpen(false);
     setActiveStep(0);
     setUrl('');
     setPassword('');
     setIsConnecting(false);
-    setCurrentRound(1);
     setData(null);
+  };
+
+  const handleBack = () => {
+    if (isInterviewing) {
+      setConfirmStopModalOpen(true);
+    } else {
+      setConfirmResetModalOpen(true);
+    }
+  };
+
+  const handleConfirmReset = () => {
+    resetState();
+    if (ws.current) {
+      ws.current.send(JSON.stringify({ 
+        type: 'CLOSE',
+        payload: {}
+      }));
+    }
+    setConfirmResetModalOpen(false);
+  };
+
+  const handleConfirmStop = () => {
+    setIsInterviewing(false);
+    setConfirmStopModalOpen(false);
+    setActiveStep(1);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -287,35 +623,19 @@ const App = () => {
     setCurrentApiKey('');
   };
 
-  // API 키 모달 열 때 현재 키 값으로 초기화
   const handleOpenApiKeyModal = () => {
-    setApiKey(currentApiKey); // 현재 API 키로 초기화
+    setApiKey(currentApiKey);
     setApiKeyModalOpen(true);
   };
 
-  // 모달 닫을 때 초기화
   const handleCloseApiKeyModal = () => {
     setApiKeyModalOpen(false);
-    setApiKey(''); // 입력 필드 초기화
-  };
-
-  const handleStopInterview = () => {
-    parent.postMessage({
-      pluginMessage: { type: 'stopInterview' }
-    }, '*');
-    setIsInterviewing(false);
-    setLoadingMessage('Stopping interview...');
-
-    // 잠시 후 초기 상태로 리셋
-    setTimeout(() => {
-      handleConfirmBack(); // 기존의 리셋 로직 재사용
-    }, 2000); // 2초 후에 리셋 실행 (사용자가 'Stopping interview...' 메시지를 볼 수 있도록)
+    setApiKey('');
   };
 
   return (
     <CssVarsProvider>
       <Box sx={{ maxWidth: 600, mx: 'auto', px: 2 }}>
-        {/* Settings Button */}
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
           <Button
             variant="outlined"
@@ -329,357 +649,114 @@ const App = () => {
         </Box>
 
         {!currentApiKey ? (
-          <Card variant="outlined">
-            <CardContent>
-              <Typography level="h2" sx={{ mb: 2 }}>
-                OpenAI API Key Required
-              </Typography>
-              <Typography level="body-md" sx={{ mb: 2 }}>
-                To use Figma Client, you need an OpenAI API key with a minimum of $5 credit balance. Here's how to get started:
-              </Typography>
-              <Stack spacing={2}>
-                <Typography level="body-sm">
-                  1. Visit the <Link href="https://platform.openai.com/signup" target="_blank">OpenAI Platform</Link>
-                </Typography>
-                <Typography level="body-sm">
-                  2. Create an account or sign in
-                </Typography>
-                <Typography level="body-sm">
-                  3. Go to <Link href="https://platform.openai.com/settings/organization/billing/overview" target="_blank">Billing settings</Link>
-                </Typography>
-                <Typography level="body-sm">
-                  4. Add a payment method and purchase at least $5 in credits
-                </Typography>
-                <Typography level="body-sm">
-                  5. Generate an API key from the <Link href="https://platform.openai.com/api-keys" target="_blank">API keys page</Link>
-                </Typography>
-              </Stack>
-              <Box sx={{ mt: 3 }}>
-                <Button
-                  variant="solid"
-                  color="primary"
-                  onClick={() => setApiKeyModalOpen(true)}
-                  startDecorator={<Key />}
-                >
-                  Set API Key
-                </Button>
-              </Box>
-            </CardContent>
-          </Card>
+          <ApiKeyCard onSetApiKey={() => setApiKeyModalOpen(true)} />
         ) : (
-          // API 키가 있을 때 보여줄 Stepper
           <Stepper orientation="vertical">
             <Step
               active={activeStep === 0}
               completed={activeStep > 0}
               indicator={
                 <StepIndicator variant={activeStep === 0 ? 'solid' : 'soft'} color="primary">
-                  {activeStep > 0 ? <CheckRounded /> : <AddLinkOutlined />}
+                  <AddLinkOutlined />
                 </StepIndicator>
               }
             >
               <Typography level="title-md">Step 1</Typography>
-
-              <Card variant="outlined">
-                <CardOverflow
-                  variant="soft"
-                  color="primary"
-                  sx={{
-                    justifyContent: 'center',
-                    letterSpacing: '1px',
-                    padding: '0.5rem 1rem',
-                    borderColor: 'divider',
-                  }}
-                >
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography sx={{ fontSize: 'xs', fontWeight: 'xl', textTransform: 'uppercase' }}>
-                      Initialize
-                    </Typography>
-                    <Button color="neutral" variant="plain" onClick={handleBack} disabled={isConnecting} size="sm">
-                      Reset
-                    </Button>
-                  </Box>
-                </CardOverflow>
-                {activeStep === 0 && (
-                  <>
-                    <CardContent>
-                      <FormControl>
-                        <FormLabel>Figma Prototype URL</FormLabel>
-                        <Input
-                          value={url}
-                          onChange={(e) => setUrl(e.target.value)}
-                          placeholder="Enter the Figma Prototype URL"
-                          disabled={isConnecting}
-                        />
-                      </FormControl>
-                      <br />
-                      <FormControl>
-                        <FormLabel>Password (optional)</FormLabel>
-                        <Input
-                          type="password"
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="Enter the password if required"
-                          disabled={isConnecting}
-                        />
-                      </FormControl>
-                    </CardContent>
-                    <CardActions>
-                      <Box sx={{ width: '100%', display: 'flex', justifyContent: 'flex-end', gap: 2 }}>
-                        <Button size="sm" onClick={handleInit} loading={isConnecting} disabled={!url || isConnecting}>
-                          Initialize
-                        </Button>
-                      </Box>
-                    </CardActions>
-                  </>
-                )}
-              </Card>
+              {activeStep === 0 && (
+                <InitStep
+                  url={url}
+                  password={password}
+                  isConnecting={isConnecting}
+                  onUrlChange={setUrl}
+                  onPasswordChange={setPassword}
+                  onInit={handleInit}
+                  onBack={handleBack}
+                />
+              )}
             </Step>
+
             <Step
               active={activeStep === 1}
               completed={activeStep > 1}
               indicator={
                 <StepIndicator variant={activeStep === 1 ? 'solid' : 'soft'} color="primary">
-                  {activeStep > 1 ? <CheckRounded /> : <DesignServicesOutlined />}
+                  <DesignServicesOutlined />
                 </StepIndicator>
               }
             >
               <Typography level="title-md">Step 2</Typography>
-
-              <Card variant="outlined">
-                <CardOverflow
-                  variant="soft"
-                  color="primary"
-                  sx={{
-                    justifyContent: 'center',
-                    letterSpacing: '1px',
-                    padding: '0.5rem 1rem',
-                    borderColor: 'divider',
-                  }}
-                >
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography sx={{ fontSize: 'xs', fontWeight: 'xl', textTransform: 'uppercase' }}>
-                      Task and Persona
-                    </Typography>
-                    <Button color="neutral" variant="plain" onClick={handleBack} disabled={isConnecting} size="sm">
-                      Reset
-                    </Button>
-                  </Box>
-                </CardOverflow>
-                {activeStep === 1 && (
-                  <>
-                    <CardContent>
-                      <Textarea
-                        placeholder="Enter task description"
-                        value={taskDesc}
-                        onChange={(e) => setTaskDesc(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        minRows={2}
-                        maxRows={6}
-                        size="md"
-                        sx={{ minHeight: 240 }}
-                        required
-                        endDecorator={
-                          <Box
-                            sx={{
-                              display: 'flex',
-                              gap: 'var(--Textarea-paddingBlock)',
-                              pt: 'var(--Textarea-paddingBlock)',
-                              borderTop: '1px solid',
-                              borderColor: 'divider',
-                              flex: 'auto',
-                            }}
-                          >
-                            <Button
-                              variant="plain"
-                              color="neutral"
-                              onClick={() => setPersonaModalOpen(true)}
-                              startDecorator={<FaceRetouchingNatural fontSize="small" />}
-                              size="sm"
-                            >
-                              {personaDesc ? 'Edit Persona' : 'Set Persona'}
-                            </Button>
-
-                            <Button
-                              variant="solid"
-                              onClick={handleExplore}
-                              disabled={!taskDesc}
-                              startDecorator={<AutoAwesome fontSize="small" />}
-                              size="sm"
-                              sx={{ ml: 'auto' }}
-                            >
-                              Submit
-                            </Button>
-                          </Box>
-                        }
-                      />
-                    </CardContent>
-                  </>
-                )}
-              </Card>
+              {activeStep === 1 && (
+                <TaskStep
+                  taskDesc={taskDesc}
+                  personaDesc={personaDesc}
+                  isConnecting={isConnecting}
+                  onTaskDescChange={setTaskDesc}
+                  onPersonaClick={() => setPersonaModalOpen(true)}
+                  onExplore={handleExplore}
+                  onBack={handleBack}
+                  onKeyDown={handleKeyDown}
+                />
+              )}
             </Step>
+
             <Step
               active={activeStep === 2}
               completed={activeStep > 2}
               indicator={
                 <StepIndicator variant={activeStep === 2 ? 'solid' : 'soft'} color="primary">
-                  {activeStep > 2 ? <CheckRounded /> : <PhotoFilterOutlined />}
+                  <PhotoFilterOutlined />
                 </StepIndicator>
               }
             >
               <Typography level="title-md">Step 3</Typography>
-
-              <Card variant="outlined" sx={{ backgroundColor: 'white' }}>
-                <CardOverflow
-                  variant="soft"
-                  color="primary"
-                  sx={{
-                    justifyContent: 'center',
-                    letterSpacing: '1px',
-                    padding: '0.5rem 1rem',
-                    borderColor: 'divider',
-                  }}
-                >
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography sx={{ fontSize: 'xs', fontWeight: 'xl', textTransform: 'uppercase' }}>
-                      Generating Report
-                    </Typography>
-                    <Button color="neutral" variant="plain" onClick={handleBack} disabled={isConnecting} size="sm">
-                      Reset
-                    </Button>
-                  </Box>
-                </CardOverflow>
-
-                {activeStep === 2 && (
-                  <CardContent>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                      <Player
-                        autoplay
-                        loop
-                        src={Animation}
-                        style={{ height: '200px', width: '200px' }}
-                      />
-                      <Typography level="body-md">{loadingMessage}</Typography>
-                      {isInterviewing && (
-                        <Button
-                          color="danger"
-                          variant="solid"
-                          onClick={handleStopInterview}
-                          sx={{ mt: 2 }}
-                        >
-                          Stop Interview
-                        </Button>
-                      )}
-                    </Box>
-                  </CardContent>
-                )}
-              </Card>
+              {activeStep === 2 && (
+                <ReportStep
+                  isInterviewing={isInterviewing}
+                  loadingMessage={loadingMessage}
+                  onBack={handleBack}
+                  onStop={() => setConfirmStopModalOpen(true)}
+                />
+              )}
             </Step>
           </Stepper>
         )}
 
-        <Modal open={openModal} onClose={() => setOpenModal(false)}>
-          <ModalDialog>
-            <DialogTitle>Confirm Action</DialogTitle>
-            <DialogContent>Stop the current exploration, and return to the initial step?</DialogContent>
-            <DialogActions>
-              <Button variant="solid" color="danger" onClick={handleConfirmBack}>
-                Confirm
-              </Button>
-              <Button variant="plain" color="neutral" onClick={() => setOpenModal(false)}>
-                Cancel
-              </Button>
-            </DialogActions>
-          </ModalDialog>
-        </Modal>
-        <Modal open={personaModalOpen} onClose={() => setPersonaModalOpen(false)}>
-          <ModalDialog layout="fullscreen">
-            <ModalClose />
-            <DialogTitle>Create Persona</DialogTitle>
-            <DialogContent>
-              <Stack spacing={2}>
-                <Textarea
-                  placeholder="(Optional) Please enter the description of the user persona you'd like me to emulate : "
-                  autoFocus
-                  value={personaDesc}
-                  minRows={3}
-                  maxRows={6}
-                  onChange={(e) => setPersonaDesc(e.target.value)}
-                />
-              </Stack>
-            </DialogContent>
-            <DialogActions>
-              <Button
-                color="primary"
-                variant="soft"
-                onClick={() => {
-                  setPersonaModalOpen(false);
-                }}
-                startDecorator={<FaceRetouchingNatural fontSize="small" />}
-              >
-                Set Persona
-              </Button>
-              <Button
-                variant="plain"
-                color="neutral"
-                onClick={() => {
-                  setPersonaDesc('');
-                  setPersonaModalOpen(false);
-                }}
-              >
-                Reset
-              </Button>
-            </DialogActions>
-          </ModalDialog>
-        </Modal>
-        <Modal open={apiKeyModalOpen} onClose={handleCloseApiKeyModal}>
-          <ModalDialog>
-            <DialogTitle>API Key Management</DialogTitle>
-            <DialogContent>
-              <Stack spacing={2}>
-                <Typography level="body-sm">
-                  {currentApiKey
-                    ? 'Your API key is set. You can update or delete it.'
-                    : 'Enter your OpenAI API key to get started.'}
-                </Typography>
-                <Input
-                  placeholder="Enter OpenAI API Key"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  endDecorator={
-                    currentApiKey && (
-                      <IconButton
-                        onClick={handleApiKeyDelete}
-                        color="danger"
-                        variant="plain"
-                        size="sm"
-                      >
-                        <Delete />
-                      </IconButton>
-                    )
-                  }
-                />
-              </Stack>
-            </DialogContent>
-            <DialogActions>
-              <Button
-                color="primary"
-                variant="solid"
-                onClick={handleApiKeySubmit}
-                disabled={!apiKey.trim()}
-              >
-                {currentApiKey === apiKey ? 'Close' : 'Save Key'}
-              </Button>
-              <Button
-                variant="plain"
-                color="neutral"
-                onClick={handleCloseApiKeyModal}
-              >
-                Cancel
-              </Button>
-            </DialogActions>
-          </ModalDialog>
-        </Modal>
+        <ConfirmModal
+          open={confirmResetModalOpen}
+          onClose={() => setConfirmResetModalOpen(false)}
+          onConfirm={handleConfirmReset}
+          title="Reset Confirmation"
+          content="Are you sure you want to reset and go back to the initial step?"
+        />
+
+        <ConfirmModal
+          open={confirmStopModalOpen}
+          onClose={() => setConfirmStopModalOpen(false)}
+          onConfirm={handleConfirmStop}
+          title="Stop Confirmation"
+          content="Are you sure you want to stop the current exploration?"
+        />
+
+        <PersonaModal
+          open={personaModalOpen}
+          personaDesc={personaDesc}
+          onClose={() => setPersonaModalOpen(false)}
+          onChange={(e) => setPersonaDesc(e)}
+          onReset={() => {
+            setPersonaDesc('');
+            setPersonaModalOpen(false);
+          }}
+        />
+
+        <ApiKeyModal
+          open={apiKeyModalOpen}
+          apiKey={apiKey}
+          currentApiKey={currentApiKey}
+          onClose={handleCloseApiKeyModal}
+          onChange={(e) => setApiKey(e)}
+          onSubmit={handleApiKeySubmit}
+          onDelete={handleApiKeyDelete}
+        />
       </Box>
     </CssVarsProvider>
   );

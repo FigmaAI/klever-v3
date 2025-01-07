@@ -1,17 +1,11 @@
-import {
-  UIElement,
-  ImageDimensions,
-  ScreenshotInfo,
-  TaskData,
-  ExploreResponse,
-} from '../typings/types';
+import { UIElement, ImageDimensions, ScreenshotInfo, TaskData, ExploreResponse } from '../typings/types';
 
 // Basic UI creation utilities
 export function createText(
-  characters: string, 
-  fontSize: number, 
+  characters: string,
+  fontSize: number,
   fontStyle: 'Regular' | 'Bold',
-  color: string | { r: number; g: number; b: number; } = '#000000'  // 헥스 코드나 RGB 객체 모두 받을 수 있음
+  color: string | { r: number; g: number; b: number } = '#000000' // 헥스 코드나 RGB 객체 모두 받을 수 있음
 ): TextNode {
   const rgbColor = typeof color === 'string' ? hexToRgb(color) : color;
 
@@ -40,7 +34,7 @@ export function hexToRgb(hex: string) {
     const color = {
       r: Math.max(0, Math.min(r, 1)),
       g: Math.max(0, Math.min(g, 1)),
-      b: Math.max(0, Math.min(b, 1))
+      b: Math.max(0, Math.min(b, 1)),
     };
 
     return color;
@@ -51,9 +45,9 @@ export function hexToRgb(hex: string) {
 }
 
 export function createTextFrame(
-  title: string, 
+  title: string,
   content: string,
-  color: string | { r: number; g: number; b: number; } = '#000000'  // 헥스 코드나 RGB 객체 모두 받을 수 있음
+  color: string | { r: number; g: number; b: number } = '#000000' // 헥스 코드나 RGB 객체 모두 받을 수 있음
 ): FrameNode {
   // 컬러 처리
   const rgbColor = typeof color === 'string' ? hexToRgb(color) : color;
@@ -87,10 +81,11 @@ export function createPreviewFrame(roundCount: number): FrameNode {
   frame.layoutMode = 'HORIZONTAL';
   frame.paddingTop = frame.paddingBottom = frame.paddingLeft = frame.paddingRight = 64;
   frame.itemSpacing = 64;
-  
+
   const bgColor = hexToRgb('#000000');
   frame.fills = [{ type: 'SOLID', color: bgColor }];
-  
+  frame.cornerRadius = 16;
+
   frame.primaryAxisSizingMode = 'AUTO';
   frame.counterAxisSizingMode = 'AUTO';
 
@@ -138,12 +133,6 @@ export function createBoundingBox(selectedElem: UIElement): RectangleNode {
   return bboxRect;
 }
 
-// Error handling utility
-export function errorMessageHandler(errorMessage: string) {
-  console.error('Error:', errorMessage);
-  figma.notify(errorMessage, { error: true });
-}
-
 export async function loadFonts() {
   await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
   await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
@@ -163,15 +152,26 @@ export function createAnatomyFrame(): FrameNode {
 
 export async function createElemList(
   node: SceneNode,
-  elemList: UIElement[] = [],
-  root: SceneNode = node
+  uselessList: string[] = []
 ): Promise<UIElement[]> {
+  return createElemListInternal(node, node, uselessList);
+}
+
+async function createElemListInternal(
+  node: SceneNode,
+  root: SceneNode,
+  uselessList: string[]
+): Promise<UIElement[]> {
+  const elemList: UIElement[] = [];
+  
   if (!node.visible) {
     return elemList;
   }
 
   if (['FRAME', 'INSTANCE', 'COMPONENT'].includes(node.type)) {
-    if (node.absoluteBoundingBox !== null && root.absoluteBoundingBox !== null) {
+    if (node.absoluteBoundingBox !== null && 
+        root.absoluteBoundingBox !== null &&
+        !uselessList.includes(node.id)) {
       const { x, y, width, height } = node.absoluteBoundingBox;
       elemList.push({
         id: node.id,
@@ -184,12 +184,15 @@ export async function createElemList(
           height,
         },
       });
+      
+      console.log(`Element processed: ${node.name} (${node.id}) - included`);
     }
   }
 
   if ('children' in node) {
     for (const child of node.children) {
-      await createElemList(child, elemList, root);
+      const childElements = await createElemListInternal(child, root, uselessList);
+      elemList.push(...childElements);
     }
   }
 
@@ -200,10 +203,10 @@ export async function createLabeledImageFrame(
   elemList: UIElement[],
   imageData: string,
   dimensions: ImageDimensions,
-  roundCount: number
+  prefix: string
 ) {
   const labeledFrame = figma.createFrame();
-  labeledFrame.name = `${roundCount}_after_labeled`;
+  labeledFrame.name = `${prefix}_labeled`;
   labeledFrame.resize(dimensions.width, dimensions.height);
 
   const imageHash = (await figma.createImageAsync(imageData)).hash;
@@ -262,6 +265,45 @@ export async function parseExploreRsp(rsp: string): Promise<ExploreResponse> {
   } catch (error) {
     console.error('Error in parseExploreRsp:', error);
     throw error;
+  }
+}
+
+export function parseReflectRsp(rsp: string) {
+  try {
+    console.log('Raw reflection response:', rsp);
+    
+    // 시작과 끝의 따옴표 제거
+    const cleanedRsp = rsp.replace(/^"|"$/g, '');
+    
+    // Decision과 Thought를 구분 (이스케이프된 \n 처리)
+    const decisionMatch = cleanedRsp.match(/Decision:\s*([^\\]*?)(?=\\n)/);
+    const thoughtMatch = cleanedRsp.match(/Thought:\s*([\s\S]*?)(?:\\n|$)/);
+
+    if (!decisionMatch) {
+      console.error('Invalid decision format in response:', cleanedRsp);
+      console.error('Decision match attempt:', cleanedRsp.match(/Decision:\s*([^\\]*?)(?=\\n)/));
+      throw new Error('Failed to parse reflection decision');
+    }
+
+    // 중복된 텍스트 제거 및 정리
+    const decision = decisionMatch[1].trim();
+    const thought = thoughtMatch ? 
+      thoughtMatch[1].replace(/\\n/g, '\n').trim() : 
+      'No thought provided';
+
+    console.log('Parsed reflection result:', {
+      decision,
+      thought
+    });
+
+    return {
+      decision,
+      thought
+    };
+  } catch (error) {
+    console.error('Error parsing reflection response:', error);
+    console.error('Original response:', rsp);
+    throw new Error('Failed to parse reflection response');
   }
 }
 
@@ -383,7 +425,7 @@ export function createSwipeArrow(selectedElem: UIElement, direction: string, dis
   return swipeLine;
 }
 
-export function createTouchPoint(selectedElem: UIElement): EllipseNode {
+function createTouchPoint(selectedElem: UIElement): EllipseNode {
   const touchPoint = figma.createEllipse();
   touchPoint.x = selectedElem.bbox.x + selectedElem.bbox.width / 2;
   touchPoint.y = selectedElem.bbox.y + selectedElem.bbox.height / 2;
@@ -406,7 +448,7 @@ function createUTReportsFrame(): FrameNode {
 }
 
 // UT Reports 프레임 가져오기 또는 생성 함수
-export async function getOrCreateUTReportsFrame(): Promise<FrameNode> {
+async function getOrCreateUTReportsFrame(): Promise<FrameNode> {
   // 현재 페이지에서 'UT Reports' 프레임 찾기
   const utReportsFrame = figma.currentPage.findChild(
     (node) => node.type === 'FRAME' && node.name === 'UT Reports'
@@ -451,45 +493,13 @@ export async function createTaskFrameWithNameAndDesc(taskData: TaskData): Promis
   return taskFrame;
 }
 
-// export async function getGenerateReportPrompt(
-//   taskData: TaskData,
-//   screenshotInfo: ScreenshotInfo,
-//   taskFrame: FrameNode,
-//   dimensions?: ImageDimensions
-// ) {
-//   try {
-//     // set initial variables (for the future use)
-//     // let lastAct = 'None';
-
-//     // request AI model and process response
-//     const prompt = createPromptForTask(taskData);
-
-//     // load dimensions if it is not provided
-//     if (!dimensions) {
-//       dimensions = await figma.clientStorage.getAsync('dimensions');
-//     }
-//     // create frames for the task and the image
-//     const { previewFrameId, beforeImageFrameId, labeledImageFrameId, elemList } =
-//       await createPreviewAndImageFrames(taskFrame, screenshotInfo, dimensions);
-
-//     return {
-//       prompt,
-//       previewFrameId,
-//       beforeImageFrameId,
-//       labeledImageFrameId,
-//       elemList
-//     };
-//   } catch (error) {
-//     console.error('Error in generateReport:', error);
-//     figma.notify('Failed to generate report', { timeout: 3000 });
-//   }
-// }
 
 export async function createPreviewAndImageFrames(
   anatomyFrame: FrameNode,
   screenshotInfo: ScreenshotInfo,
   dimensions: ImageDimensions,
-  roundCount: number
+  roundCount: number,
+  elemList: UIElement[]
 ) {
   // Create preview frame
   const previewFrame = createPreviewFrame(roundCount);
@@ -499,101 +509,24 @@ export async function createPreviewAndImageFrames(
   const beforeImageFrame = await createImageFrame(screenshotInfo.imageData, `${roundCount}_before`, dimensions);
   previewFrame.appendChild(beforeImageFrame);
 
-  // Get element list
-  const node = (await figma.getNodeByIdAsync(screenshotInfo.nodeId)) as SceneNode;
-  if (!node) throw new Error('Node not found');
-  const elemList = await createElemList(node);
-
-  // Create labeled image
-  const labeledImageFrame = await createLabeledImageFrame(elemList, screenshotInfo.imageData, dimensions, roundCount);
-  // set time delay for the afterImage to load
-  await delay(500);
+  // Create labeled image with provided elements
+  const labeledImageFrame = await createLabeledImageFrame(
+    elemList,
+    screenshotInfo.imageData,
+    dimensions,
+    `${roundCount}_before`
+  );
+  
+  await new Promise((resolve) => setTimeout(resolve, 500));
   previewFrame.appendChild(labeledImageFrame);
 
   return {
-    previewFrame: previewFrame,
-    beforeImageFrame: beforeImageFrame,
-    labeledImageFrame: labeledImageFrame,
-    elemList: elemList,
+    previewFrame,
+    beforeImageFrame,
+    labeledImageFrame
   };
 }
 
-// export async function generateReportResult(
-//   responseData: any,
-//   previewFrameId: string,
-//   elemList: UIElement[],
-//   screenshotInfo: ScreenshotInfo,
-//   taskFrame: FrameNode,
-//   roundCount: number
-// ) {
-//   try {
-//     if (responseData) {
-//       console.log('Received response from AI');
-
-//       // get the frames
-//       const previewFrame = (await figma.getNodeByIdAsync(previewFrameId)) as FrameNode;
-
-//       if (!previewFrame) {
-//         throw new Error('Required frames not found');
-//       }
-
-//       const result = parseModelResponse(JSON.stringify(responseData));
-
-//       if (!result) {
-//         throw new Error('Failed to parse AI response');
-//       }
-
-//       console.log('AI Model Response:', result);
-
-//       // Move focus to the task Frame report
-//       figma.viewport.scrollAndZoomIntoView([taskFrame]);
-//       console.log('Report generated successfully', taskFrame.id);
-
-//       return result;
-//     }
-//   } catch (error) {
-//     console.error('Error in generateReportResult:', error);
-//     figma.notify('Failed to generate report', { timeout: 3000 });
-//     return null;
-//   }
-// }
-
-// export function parseModelResponse(
-//   rsp: string
-// ): { observation: string; thought: string; action: string; summary: string } | null {
-//   try {
-//     const observationMatch = rsp.match(/Observation: ([\s\S]*?)(?:\\n\\nThought:|$)/);
-//     const thoughtMatch = rsp.match(/Thought: ([\s\S]*?)(?:\\n\\nAction:|$)/);
-//     const actionMatch = rsp.match(/Action: ([\s\S]*?)(?:\\n\\nSummary:|$)/);
-//     const summaryMatch = rsp.match(/Summary: ([\s\S]*?)(?="$)/);
-
-//     console.log('rsp:', rsp);
-//     console.log('Observation:', observationMatch);
-//     console.log('Thought:', thoughtMatch);
-  
-//     if (!observationMatch || !thoughtMatch || !actionMatch || !summaryMatch) {
-//       console.error('Failed to match one or more patterns:', {
-//         observationMatch: !!observationMatch,
-//         thoughtMatch: !!thoughtMatch,
-//         actionMatch: !!actionMatch,
-//         summaryMatch: !!summaryMatch,
-//       });
-//       console.error('Raw response:', rsp);
-//       return null;
-//     }
-
-//     // 각 섹션의 내용을 트림하여 반환
-//     return {
-//       observation: observationMatch[1].trim(),
-//       thought: thoughtMatch[1].trim(),
-//       action: actionMatch[1].trim(),
-//       summary: summaryMatch[1].trim(),
-//     };
-//   } catch (error) {
-//     console.error('Error in parseModelResponse:', error);
-//     return null;
-//   }
-// }
 
 export async function getFrameImageBase64(node: SceneNode): Promise<string> {
   const imageBytes = await node.exportAsync({ format: 'JPG' });
@@ -655,11 +588,7 @@ export function createTaskDescFrame(taskData: TaskData) {
   return frame;
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export function parseAction(action: string) {
+export function parseAction(action: string): { actName: string; args: string } {
   try {
     const actMatch = action.match(/(\w+)\((.*)\)/);
     if (!actMatch) {
@@ -672,4 +601,43 @@ export function parseAction(action: string) {
     console.error('Error in parseAction:', error);
     return { actName: 'FINISH', args: '' };
   }
+}
+
+export async function createReflectionFrames(
+  previewFrame: FrameNode,
+  screenshotInfo: ScreenshotInfo,
+  dimensions: ImageDimensions,
+  roundCount: number,
+  elemList: UIElement[]
+): Promise<{ labeledImageFrame: FrameNode }> {
+  
+  // Create Name
+  const titleText = createText(`Result ${roundCount}`, 48, 'Bold', '#FFFFFF');
+  previewFrame.appendChild(titleText);
+
+  // Create labeled image
+  const labeledImageFrame = await createLabeledImageFrame(
+    elemList,
+    screenshotInfo.imageData,
+    dimensions,
+    `${roundCount}_after`
+  );
+  previewFrame.appendChild(labeledImageFrame);
+
+  return { labeledImageFrame };
+}
+
+export function createReflectionResponseFrame(decision: string, thought: string) {
+  const frame = figma.createFrame();
+  frame.name = 'Reflection Response';
+  frame.layoutMode = 'VERTICAL';
+  frame.itemSpacing = 32;
+  frame.fills = [];
+  frame.primaryAxisSizingMode = 'AUTO';
+  frame.counterAxisSizingMode = 'AUTO';
+
+  frame.appendChild(createTextFrame('Decision', decision, '#ffffff'));
+  frame.appendChild(createTextFrame('Thought', thought, '#ffffff'));
+
+  return frame;
 }

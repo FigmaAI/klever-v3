@@ -8,7 +8,7 @@ export class AIModel {
   modelType: string;
   baseUrl: string;
   apiKey: string;
-  maxRounds: number;
+  maxRounds: number | 30;
 
   constructor(config: AIModelConfig) {
     this.model = config.model;
@@ -22,6 +22,24 @@ export class AIModel {
 
   async getModelResponse(prompt: string, images: string[]) {
     try {
+      const messages = [
+        {
+          role: 'system',
+          content: [{ type: 'text', text: prompt }],
+        },
+        {
+          role: 'user',
+          content: images.map((image) => ({
+            type: 'image_url',
+            image_url: {
+              url: `data:image/jpeg;base64,${image}`
+            }
+          })),
+        },
+      ];
+
+      console.log('Sending request to OpenAI with messages:', messages);
+
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: {
@@ -30,19 +48,7 @@ export class AIModel {
         },
         body: JSON.stringify({
           model: this.model,
-          messages: [
-            {
-              role: 'system',
-              content: [{ type: 'text', text: prompt }],
-            },
-            {
-              role: 'user',
-              content: images.map((image) => ({
-                type: 'image_url',
-                image_url: { url: image }
-              })),
-            },
-          ],
+          messages,
           temperature: this.temperature,
           max_tokens: this.maxTokens,
         }),
@@ -56,7 +62,6 @@ export class AIModel {
       }
 
       const content = data.choices[0].message.content;
-      
       return content;
 
     } catch (error) {

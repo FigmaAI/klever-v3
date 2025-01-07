@@ -1,112 +1,28 @@
 // types.ts
 
-export interface ServerResponse {
-  status: 'success' | 'error';
-  message: string;
-  data?: any;
-}
-
 export enum WSMessageType {
   INIT = 'INIT',
-  CLOSE = 'CLOSE',
-  TASK_SETUP = 'TASK_SETUP',
   GET_SCREENSHOT = 'GET_SCREENSHOT',
-  SCREENSHOT = 'SCREENSHOT',
-  ERROR = 'ERROR',
-  EXECUTE_ACTION = 'EXECUTE_ACTION',
-  GET_EXPLORATION = 'GET_EXPLORATION',
-  GET_REFLECTION = 'GET_REFLECTION',
-  EXPLORATION_COMPLETE = 'EXPLORATION_COMPLETE'
+  EXECUTE_ACTION = 'EXECUTE_ACTION'
 }
 
 export interface WSMessage {
   type: WSMessageType;
   status?: 'success' | 'error';
-  payload?:
-    | InitResponse
-    | {
-        message: string;
-        nodeId?: string;
-        imageData?: string;
-      };
+  payload?: InitResponse | ScreenshotInfo | ErrorPayload;
 }
 
-export interface ScreenshotArea {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
+// 기본 인터페이스
 export interface ScreenshotInfo {
   nodeId: string;
   imageData: string;
 }
 
-export interface TaskSubmitData {
-  taskDesc: string;
-  personaDesc: string;
-  screenshotInfo: ScreenshotInfo;
+export interface ImageDimensions {
+  width: number;
+  height: number;
 }
 
-export type PluginMessage =
-  | { type: 'init'; url: string; password: string }
-  | { type: 'error'; message: string }
-  | { type: 'saveApiKey'; data: string }
-  | { type: 'deleteApiKey' }
-  | { type: 'getCurrentApiKey' }
-  | { type: 'currentApiKey'; message: string }
-  | { type: 'websocket-send'; data: WSMessage }
-  | { type: 'stopInterview' }
-  | {
-      type: 'loading';
-      payload: {
-        loading: boolean;
-        message: string;
-      };
-    }
-  | {
-      type: 'submit';
-      data: {
-        taskData: {
-          taskDesc: string;
-          personaDesc: string;
-        };
-        screenshotInfo: {
-          nodeId: string;
-          imageData: string;
-        };
-      };
-    }
-  | {
-      type: 'execute-action';
-      payload: {
-        action: string;
-        centerX: number;
-        centerY: number;
-        direction?: string;
-        distance?: string;
-      };
-    };
-
-export interface ParsedReport {
-  title: string;
-  taskName: string;
-  taskDesc: string;
-  personaDesc: string;
-  rounds: Promise<ParsedRound>[];
-}
-
-export interface ParsedRound {
-  images: string[];
-  observation: string;
-  thoughts: string[];
-  action: string;
-  summary: string;
-  decision: string;
-}
-
-// Defines the type for UI elements
 export interface UIElement {
   id: string;
   type: string;
@@ -114,7 +30,12 @@ export interface UIElement {
   bbox: { x: number; y: number; width: number; height: number };
 }
 
-// Defines the configuration type passed to the AI model constructor
+export interface TaskData {
+  taskDesc: string;
+  personaDesc?: string;
+}
+
+// AI 모델 관련
 export interface AIModelConfig {
   model?: string;
   temperature?: number;
@@ -125,39 +46,87 @@ export interface AIModelConfig {
   maxRounds: number;
 }
 
-// Defines the response type from the AI model
-export interface AIModelResponse {
-  success: boolean;
-  data?: any;
-  error?: string;
+export interface ExploreResponse {
+  observation: string;
+  thought: string;
+  action: string;
+  summary: string;
 }
 
-export interface TaskData {
-  taskDesc: string;
-  personaDesc?: string;
-}
-
-export interface PreviewFrameResult {
-  previewFrame: FrameNode;
-  originalImage: FrameNode;
-  labeledImage: FrameNode;
-}
-
-export interface ImageDimensions {
+// 초기화 응답
+export interface InitResponse {
+  fileKey: string;
+  message: string;
   width: number;
   height: number;
 }
 
-export interface WSScreenshotResponse {
-  type: WSMessageType.SCREENSHOT;
-  status: 'success' | 'error';
-  payload: {
-    nodeId: string;
-    imageData: string;
-  };
-}
+// 플러그인 메시지 타입
+export type PluginMessage =
+  | { type: 'init'; url: string; password: string }
+  | { type: 'saveApiKey'; data: string }
+  | { type: 'deleteApiKey' }
+  | { type: 'getCurrentApiKey' }
+  | { type: 'currentApiKey'; message: string }
+  | { type: 'websocket-send'; data: WSMessage }
+  | { type: 'get-model-instance' }
+  | { type: 'model-instance-created'; payload: AIModelConfig }
+  | { 
+      type: 'create-task-frame';
+      data: {
+        taskDesc: string;
+        personaDesc: string;
+      }
+    }
+  | {
+      type: 'create-preview-frames';
+      data: {
+        anatomyFrameId: string;
+        roundCount: number;
+        screenshotInfo: ScreenshotInfo;
+        elemList: UIElement[];
+      };
+    }
+  | {
+      type: 'parse-explore-rsp';
+      payload: {
+        previewFrameId: string;
+        res: ExploreResponse;
+        elemList: UIElement[];
+        screenshotInfo: ScreenshotInfo;
+        roundCount: number;
+      }
+    }
+  | {
+      type: 'create-reflection-frame';
+      data: {
+        previewFrameId: string;
+        screenshotInfo: ScreenshotInfo;
+        roundCount: number;
+        elemList: UIElement[];
+      }
+    }
+  | {
+      type: 'parse-reflect-rsp';
+      payload: {
+        previewFrameId: string;
+        decision: string;
+        thought: string;
+      }
+    }
+  | { type: 'error'; payload: { message: string } }
+  | {
+      type: 'create-elem-list';
+      nodeId: string;
+      uselessList: string[];
+    }
+  | {
+      type: 'elem-list-created';
+      payload: {
+        elemList: UIElement[];
+      }
+    };
 
-// Config interface for OpenAI settings
 export interface Config {
   MODEL: string;
   OPENAI_API_BASE: string;
@@ -169,51 +138,16 @@ export interface Config {
   MAX_ROUNDS: number;
 }
 
-export interface ExploreResponse {
-  observation: string;
-  thought: string;
-  action: string;
-  summary: string;
-}
-
-export interface InitResponse {
-  fileKey: string;
+export interface ErrorPayload {
   message: string;
-  screenshotArea: ScreenshotArea;
-  taskDir: string;
 }
 
-// 기존 타입 정의에 추가
-export interface WebSocketResponse {
-  type: string;
-  status: 'success' | 'error';
-  payload: InitResponse;
+// Preview 프레임 생성 결과를 위한 인터페이스 추가
+export interface PreviewFramesResult {
+  previewFrameId: string;
+  labeledImageFrameBase64: string;
 }
 
-export interface ExplorationState {
-  currentRound: number;
-  taskComplete: boolean;
-  lastAction: string;
-  uselessElements: string[];
-}
-
-export interface ExplorationResponse {
-  observation: string;
-  thought: string;
-  action: string;
-  summary: string;
-}
-
-export interface ReflectionResponse {
-  decision: 'SUCCESS' | 'INEFFECTIVE' | 'FINISH';
-  summary: string;
-  elementId?: string;
-}
-
-export interface RoundData {
-  round: number;
-  beforeImage: string;
-  afterImage: string;
-  response: ExplorationResponse;
-  reflection: ReflectionResponse;
+export interface ReflectionFramesResult {
+  labeledImageFrameBase64: string;
 }
