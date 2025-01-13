@@ -8,29 +8,27 @@ export const prompts = {
 };
 
 export function createPromptForTask(taskData: TaskData): string {
-  const template = prompts['self_explore_task_with_persona_template'];
-
-  let prompt = template.replace('<task_description>', taskData.taskDesc);
-  if (taskData.personaDesc !== undefined) {
-    prompt = prompt.replace('<persona_description>', `As a person who is ${taskData.personaDesc}`);
-  } else {
-    prompt = prompt.replace('<persona_description>', '');
+  const { taskDesc, personaDesc } = taskData;
+  let formattedPersonaDesc = '';
+  
+  if (personaDesc) {
+    formattedPersonaDesc = `as a person who is ${personaDesc}`;
   }
-  return prompt;
+
+  return prompts.self_explore_task_with_persona_template
+    .replace('<task_description>', taskDesc)
+    .replace('<persona_description>', formattedPersonaDesc);
 }
 
 export function createPromptForReflection(taskData: TaskData): string {
-  const template = prompts['self_explore_reflect_with_persona_template'];
-
-  let prompt = template.replace('<task_description>', taskData.taskDesc);
-  if (taskData.personaDesc) {
-    prompt = prompt.replace('<persona_description>', `As a person who is ${taskData.personaDesc}`);
-  } else {
-    prompt = prompt.replace('<persona_description>', '');
+  const { taskDesc, personaDesc } = taskData;
+  let formattedPersonaDesc = '';
+  
+  if (personaDesc) {
+    formattedPersonaDesc = `as a person who is ${personaDesc}`;
   }
 
-  // (temp) Replace <last_act> in prompt with None
-  prompt = prompt.replace('<last_act>', 'None');
-
-  return prompt;
+  return prompts.self_explore_reflect_with_persona_template
+    .replace('<task_desc>', taskDesc)
+    .replace('<persona_description>', formattedPersonaDesc);
 }

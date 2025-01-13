@@ -15,7 +15,7 @@ import {
   Key
 } from '@mui/icons-material';
 import { handlePluginError } from '../../utils/messageHandlers';
-import { WSMessage, InitResponse, WSMessageType, ScreenshotInfo, TaskData, UIElement, ErrorPayload, PreviewFramesResult, ReflectionFramesResult } from '../../typings/types';
+import { WSMessage, InitResponse, WSMessageType, ScreenshotInfo, TaskData, UIElement, ErrorPayload, PreviewFramesResult, ReflectionFramesResult, responsePayload } from '../../typings/types';
 import { ApiKeyCard, InitStep, TaskStep, ReportStep } from './steps';
 import { ConfirmModal, PersonaModal, ApiKeyModal } from './modals';
 import { createPromptForTask, AIModel, parseExploreRsp, createPromptForReflection } from '../../plugin';
@@ -40,7 +40,6 @@ const App = () => {
   const [loadingMessage, setLoadingMessage] = React.useState<string>('');
   const [isInterviewing, setIsInterviewing] = React.useState(false);
   const ws = React.useRef<WebSocket | null>(null);
-  const [modelInstance, setModelInstance] = React.useState<AIModel | null>(null);
   const nodeElemListCache = React.useRef<Map<string, UIElement[]>>(new Map());
 
   React.useEffect(() => {
@@ -74,7 +73,6 @@ const App = () => {
         } else if (msg.type === 'model-instance-created') {
           console.log('Creating model instance with config:', msg.payload);
           const model = new AIModel(msg.payload);  // AIModel 인스턴스 직접 생성
-          setModelInstance(model);
           console.log('Model instance created:', model);
         } else if (msg.type === 'websocket-send') {
           // WebSocket 메시지 전송 처리
@@ -97,13 +95,10 @@ const App = () => {
         if (response.type === "INIT") {
           setIsConnecting(false);
           if (response.status === 'success' && response.payload) {
-            console.log('Init successful, setting activeStep to 1');
+            console.log('Init successful, setting activeStep to 1', response.payload);
             const initResponse = response.payload as InitResponse;
             setData(initResponse);
             setActiveStep(1);
-            
-            // modelInstance 초기화 상태 로깅 추가
-            console.log('Current modelInstance:', modelInstance);
             
             console.log('ActiveStep should now be 1');
           } else {
@@ -185,11 +180,6 @@ const App = () => {
       return;
     }
 
-    if (!modelInstance) {
-      handlePluginError('AI model not initialized');
-      return;
-    }
-
     setIsInterviewing(true);
     setLoadingMessage('Creating frames...');
     setActiveStep(2);
@@ -211,7 +201,7 @@ const App = () => {
         if (event.data.pluginMessage?.type === 'task-frame-created') {
           const { anatomyFrameId } = event.data.pluginMessage.payload;
           console.log('Anatomy frame created:', anatomyFrameId);
-          startExplorationRounds(anatomyFrameId);
+          startExplorationRounds(anatomyFrameId, { taskDesc, personaDesc });
         } else if (event.data.pluginMessage?.type === 'error') {
           throw new Error(event.data.pluginMessage.payload.message);
         }
@@ -266,12 +256,13 @@ const App = () => {
     });
   };
 
-  const startExplorationRounds = async (anatomyFrameId: string): Promise<void> => {
+  const startExplorationRounds = async (anatomyFrameId: string, taskData: TaskData): Promise<void> => {
     try {
+      setIsInterviewing(true);
       let round = 1;
       let taskComplete = false;
-      let lastAct = 'None';
-      const maxRounds = modelInstance?.maxRounds || 30;
+      let lastAct = "None";
+      const maxRounds = 30;  // 하드코딩 (추후 Init 시점에서 받아올 예정)
       const uselessList = new Set<string>();
       
       console.log('Starting exploration:', { round: 1, maxRounds });
@@ -312,19 +303,44 @@ const App = () => {
           window.addEventListener('message', handlePreviewCreation);
         });
 
-        // 4. Create prompt and get AI response
+        // 4. Get AI response
         setLoadingMessage(`Round ${round}: Getting AI response...`);
-        const taskData: TaskData = { taskDesc, personaDesc };
+        const exploreResponse = await new Promise<any>((resolve, reject) => {
+            if (!ws.current) return reject('No WebSocket connection');
 
-        // Create prompt and ask for AppAgent
-        let prompt = createPromptForTask(taskData);
-        prompt = prompt.replace('<last_act>', lastAct);
-        const response = await modelInstance.getModelResponse(prompt, [previewData.labeledImageFrameBase64]);
+            // 프롬프트 생성 및 준비
+            let prompt = createPromptForTask(taskData);
+            prompt = prompt.replace('<last_act>', lastAct || 'None');
 
-        if (!response) {
+            // WebSocket으로 서버에 전송
+            ws.current.send(JSON.stringify({
+                type: WSMessageType.EXPLORE,
+                payload: {
+                    prompt: prompt,
+                    imageBase64: [previewData.labeledImageFrameBase64]
+                }
+            }));
+
+            const handleResponse = (event: MessageEvent) => {
+                const data: responsePayload = JSON.parse(event.data);
+                console.log('Received response:', data);
+                if (data.type === WSMessageType.EXPLORE) {
+                    ws.current?.removeEventListener('message', handleResponse);
+                    if (data.status === 'success') {
+                        resolve(data.payload);
+                    } else {
+                        reject(data.payload?.message || 'Exploration failed');
+                    }
+                }
+            };
+            ws.current.addEventListener('message', handleResponse);
+        });
+
+        if (!exploreResponse) {
+          console.error('Explore response status:', exploreResponse);
           throw new Error('No response from AI model');
         }
-        const res = await parseExploreRsp(JSON.stringify(response));
+        const res = await parseExploreRsp(JSON.stringify(exploreResponse.response));
         console.log('Parsed response:', res);
 
         parent.postMessage({
@@ -342,6 +358,8 @@ const App = () => {
 
         // Parse action details
         const { actName: initialActName, args } = parseAction(res.action);
+        const { area } = parseAreaNumber(args);
+        const resource_id = elemList[area]?.id;
         let actName = initialActName;
         lastAct = res.summary;
 
@@ -371,6 +389,7 @@ const App = () => {
             }
 
             if (!data?.screenshotArea) {
+              console.log('Screenshot area not initialized', data);
               throw new Error('Screenshot area not initialized');
             }
 
@@ -436,57 +455,46 @@ const App = () => {
         console.log('Reflection data:', reflectionData);
 
         // Create reflection AI prompt and get AI response
-        let reflectionPrompt = createPromptForReflection(taskData);
+        const reflectionResponse = await new Promise<any>((resolve, reject) => {
+            if (!ws.current) return reject('No WebSocket connection');
 
-        if (actName === "tap") {
-          reflectionPrompt = reflectionPrompt.replace('<action>', 'tapping');
-        } else if (actName === "text") {
-          continue;
-        } else if (actName === "long_press") {
-          reflectionPrompt = reflectionPrompt.replace('<action>', 'long pressing');
-        } else if (actName === "swipe") {
-          const swipeDir = res[2];
-          if (swipeDir === "up" || swipeDir === "down") {
-            actName = "v_swipe";
-          } else if (swipeDir === "left" || swipeDir === "right") {
-            actName = "h_swipe";
-          }
-          reflectionPrompt = reflectionPrompt.replace('<action>', 'swiping');
-        } else {
-          console.error("ERROR: Undefined act!");
-          break;
-        }
+            // 프롬프트 생성
+            let prompt = createPromptForReflection(taskData);
+            prompt = prompt
+                .replace('<last_act>', lastAct)
+                .replace('<action>', actName)
+                .replace('<ui_element>', area.toString());
 
-        let area = parseAreaNumber(args).area;
-        let resource_id = elemList[area].id;
+            ws.current.send(JSON.stringify({
+                type: WSMessageType.REFLECT,
+                payload: {
+                    prompt: prompt,
+                    imageBase64: [previewData.labeledImageFrameBase64, reflectionData.labeledImageFrameBase64],
+                }
+            }));
 
-        // 간단한 라운드 정보만 로깅
-        console.log('Round:', {
-          number: round,
-          action: actName,
-          elementId: resource_id,
-          uselessListSize: uselessList.size
+            const handleResponse = (event: MessageEvent) => {
+                const data: responsePayload = JSON.parse(event.data);
+                if (data.type === WSMessageType.REFLECT) {
+                    ws.current?.removeEventListener('message', handleResponse);
+                    if (data.status === 'success') {
+                        resolve(data.payload);
+                    } else {
+                        reject(data.payload?.message || 'Reflection failed');
+                    }
+                }
+            };
+            ws.current.addEventListener('message', handleResponse);
         });
 
-        if (resource_id) {
-          uselessList.add(resource_id);
-        }
-
-        reflectionPrompt = reflectionPrompt.replace('<ui_element>', area.toString());
-        reflectionPrompt = reflectionPrompt.replace('<task_desc>', taskData.taskDesc);
-        reflectionPrompt = reflectionPrompt.replace('<last_act>', lastAct || 'None');
-
-        const reflectionResponse = await modelInstance.getModelResponse(reflectionPrompt, [
-          previewData.labeledImageFrameBase64,
-          reflectionData.labeledImageFrameBase64
-        ]);
+        console.log('Reflection data:', reflectionData);
 
         if (!reflectionResponse) {
           throw new Error('No response from AI model for reflection');
         }
 
         try {
-          const { decision, thought } = await parseReflectRsp(JSON.stringify(reflectionResponse));
+          const { decision, thought } = await parseReflectRsp(JSON.stringify(reflectionResponse.response));
           console.log('Parsed reflection response:', { decision, thought });
 
           if (!decision) {
@@ -545,7 +553,8 @@ const App = () => {
           }
 
           // 다음 라운드에서 uselessList를 고려하여 prompt 수정
-          prompt = createPromptForTask(taskData);
+          const taskData: TaskData = { taskDesc, personaDesc };
+          let prompt = createPromptForTask(taskData);
           prompt = prompt.replace('<last_act>', lastAct);
           // uselessList 정보를 prompt에 추가
           if (uselessList.size > 0) {

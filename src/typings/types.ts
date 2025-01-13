@@ -3,13 +3,15 @@
 export enum WSMessageType {
   INIT = 'INIT',
   GET_SCREENSHOT = 'GET_SCREENSHOT',
-  EXECUTE_ACTION = 'EXECUTE_ACTION'
+  EXECUTE_ACTION = 'EXECUTE_ACTION',
+  EXPLORE = 'EXPLORE',
+  REFLECT = 'REFLECT',
 }
 
 export interface WSMessage {
   type: WSMessageType;
   status?: 'success' | 'error';
-  payload?: InitResponse | ScreenshotInfo | ErrorPayload;
+  payload?: InitResponse | ScreenshotInfo | ErrorPayload | ExploreResponse | ReflectionFramesResult;
 }
 
 // 기본 인터페이스
@@ -46,6 +48,15 @@ export interface AIModelConfig {
   maxRounds: number;
 }
 
+export interface responsePayload {
+  payload: {
+    response: string;
+    message?: string;
+  };
+  status: string;
+  type: string;
+}
+
 export interface ExploreResponse {
   observation: string;
   thought: string;
@@ -63,7 +74,7 @@ export interface InitResponse {
     y: number;
     width: number;
     height: number;
-  }
+  };
 }
 
 // 플러그인 메시지 타입
@@ -76,12 +87,12 @@ export type PluginMessage =
   | { type: 'websocket-send'; data: WSMessage }
   | { type: 'get-model-instance' }
   | { type: 'model-instance-created'; payload: AIModelConfig }
-  | { 
+  | {
       type: 'create-task-frame';
       data: {
         taskDesc: string;
         personaDesc: string;
-      }
+      };
     }
   | {
       type: 'create-preview-frames';
@@ -100,7 +111,7 @@ export type PluginMessage =
         elemList: UIElement[];
         screenshotInfo: ScreenshotInfo;
         roundCount: number;
-      }
+      };
     }
   | {
       type: 'create-reflection-frame';
@@ -109,7 +120,7 @@ export type PluginMessage =
         screenshotInfo: ScreenshotInfo;
         roundCount: number;
         elemList: UIElement[];
-      }
+      };
     }
   | {
       type: 'parse-reflect-rsp';
@@ -117,7 +128,7 @@ export type PluginMessage =
         previewFrameId: string;
         decision: string;
         thought: string;
-      }
+      };
     }
   | { type: 'error'; payload: { message: string } }
   | {
@@ -129,7 +140,7 @@ export type PluginMessage =
       type: 'elem-list-created';
       payload: {
         elemList: UIElement[];
-      }
+      };
     };
 
 export interface Config {
