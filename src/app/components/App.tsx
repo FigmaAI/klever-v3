@@ -12,12 +12,11 @@ import {
   AddLinkOutlined,
   PhotoFilterOutlined
 } from '@mui/icons-material';
-import { handlePluginError } from '../../utils/messageHandlers';
 import { WSMessage, InitResponse, WSMessageType, ScreenshotInfo, TaskData, UIElement, ErrorPayload, PreviewFramesResult, ReflectionFramesResult, responsePayload } from '../../typings/types';
 import { InitStep, TaskStep, ReportStep } from './steps';
 import { ConfirmModal, PersonaModal } from './modals';
 import { createPromptForTask, parseExploreRsp, createPromptForReflection } from '../../plugin';
-import { parseAction, parseReflectRsp } from '../../plugin/FigmaUtils';
+import { parseAction, parseReflectRsp, handlePluginError } from '../../plugin/FigmaUtils';
 import WebSocketStatus from './WebSocketStatus';
 
 const App = () => {
@@ -42,7 +41,7 @@ const App = () => {
     dataRef.current = data;
   }, [data]);
 
-  // 플러그인 메시지 핸들러를 컴포넌트 레벨로 이동
+  // Move plugin message handler to component level
   const handlePluginMessage = React.useCallback((event: MessageEvent) => {
     if (event.data.pluginMessage) {
       const msg = event.data.pluginMessage;
@@ -53,7 +52,7 @@ const App = () => {
     }
   }, []);
 
-  // WebSocket 연결 관리
+  // Manage WebSocket connection
   const connectWebSocket = React.useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.close();
@@ -71,7 +70,7 @@ const App = () => {
       setWsConnected(false);
     };
 
-    // WebSocket 메시지 수신 처리
+    // Handle WebSocket message reception
     ws.current.onmessage = (event) => {
       const response = JSON.parse(event.data) as WSMessage;
       console.log('WebSocket message received:', response);
@@ -92,7 +91,7 @@ const App = () => {
       }
     };
 
-    // WebSocket 에러 처리
+    // Handle WebSocket errors
     ws.current.onerror = (error) => {
       console.error('WebSocket error:', error);
       setIsConnecting(false);
@@ -100,7 +99,7 @@ const App = () => {
     };
   }, []);
 
-  // 플러그인 메시지 리스너 등록
+  // Register plugin message listener
   React.useEffect(() => {
     window.addEventListener('message', handlePluginMessage);
     return () => {
@@ -108,7 +107,7 @@ const App = () => {
     };
   }, [handlePluginMessage]);
 
-  // WebSocket 초기 연결
+  // Initialize WebSocket connection
   React.useEffect(() => {
     connectWebSocket();
     return () => {
@@ -256,7 +255,7 @@ const App = () => {
       let round = 1;
       let taskComplete = false;
       let lastAct = "None";
-      const maxRounds = 30;  // 하드코딩 (추후 Init 시점에서 받아올 예정)
+      const maxRounds = 30;  // hardcoded for now, will be fetched from InitResponse later
       const uselessList = new Set<string>();
 
       console.log('Starting exploration:', { round: 1, maxRounds });
@@ -302,11 +301,11 @@ const App = () => {
         const exploreResponse = await new Promise<any>((resolve, reject) => {
           if (!ws.current) return reject('No WebSocket connection');
 
-          // 프롬프트 생성 및 준비
+          // prepare prompt
           let prompt = createPromptForTask(taskData);
           prompt = prompt.replace('<last_act>', lastAct || 'None');
 
-          // WebSocket으로 서버에 전송
+          // send prompt to server via WebSocket
           ws.current.send(JSON.stringify({
             type: WSMessageType.EXPLORE,
             payload: {
@@ -394,7 +393,7 @@ const App = () => {
                 payload: {
                   action: actName,
                   bbox: elem.bbox,
-                  screenshotArea: data.screenshotArea,  // InitResponse에서 받은 screenshotArea 추가
+                  screenshotArea: data.screenshotArea,  // add screenshotArea from InitResponse
                   ...(actName === 'swipe' && {
                     direction: rest[0]?.toLowerCase(),
                     distance: rest[1] || 'medium'
@@ -402,7 +401,7 @@ const App = () => {
                 }
               }));
 
-              // 액션 실행 후 잠시 대기
+              // wait for action to be executed
               await new Promise(resolve => setTimeout(resolve, 1000));
             }
           } catch (error) {
@@ -465,14 +464,14 @@ const App = () => {
           };
 
           ws.current.addEventListener('message', handleResponse);
-          // 프롬프트 생성
+          // create reflection prompt
           let prompt = createPromptForReflection(taskData);
           prompt = prompt
             .replace('<last_act>', lastAct)
             .replace('<action>', actName)
             .replace('<ui_element>', area.toString());
 
-          // 요청 전송
+          // send request to server
           ws.current.send(JSON.stringify({
             type: WSMessageType.REFLECT,
             payload: {
@@ -494,7 +493,7 @@ const App = () => {
 
           if (!decision) {
             console.warn('Invalid reflection decision, defaulting to CONTINUE');
-            // 기본값으로 CONTINUE 설정
+            // default to CONTINUE
             parent.postMessage({
               pluginMessage: {
                 type: 'parse-reflect-rsp',
@@ -518,7 +517,7 @@ const App = () => {
             }, '*');
           }
 
-          // decision 처리 로직
+          // decision processing logic
           if (decision === "ERROR") {
             break;
           }
@@ -547,16 +546,16 @@ const App = () => {
             }
           }
 
-          // 다음 라운드에서 uselessList를 고려하여 prompt 수정
+          // Consider uselessList in next round
           const taskData: TaskData = { taskDesc, personaDesc };
           let prompt = createPromptForTask(taskData);
           prompt = prompt.replace('<last_act>', lastAct);
-          // uselessList 정보를 prompt에 추가
+          // add uselessList info to prompt
           if (uselessList.size > 0) {
             prompt += `\nPreviously ineffective elements: ${Array.from(uselessList).join(', ')}`;
           }
 
-          // 노드가 변경되었다면 캐시 초기화
+          // if node changed, clear cache
           if (afterScreenshot.nodeId !== beforeScreenshot.nodeId) {
             console.log('Node changed:', {
               from: beforeScreenshot.nodeId,
@@ -567,7 +566,7 @@ const App = () => {
             console.log('Cache after node change:', Array.from(nodeElemListCache.current.keys()));
           }
 
-          // 액션 파싱 결과 로깅
+          // log action parsing result
           console.log('Action parsed:', {
             actName,
             args,
@@ -575,7 +574,7 @@ const App = () => {
             elementId: resource_id
           });
 
-          // uselessList 업데이트 로깅
+          // log uselessList update
           if (decision === "INEFFECTIVE" || decision === "BACK" || decision === "CONTINUE") {
             console.log('Adding to uselessList:', {
               elementId: resource_id,
@@ -589,7 +588,7 @@ const App = () => {
           round++;
         } catch (error) {
           console.error('Error parsing reflection response:', error);
-          // 에러 발생 시 CONTINUE로 처리
+          // handle error by defaulting to CONTINUE
           parent.postMessage({
             pluginMessage: {
               type: 'parse-reflect-rsp',

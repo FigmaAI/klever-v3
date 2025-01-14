@@ -18,7 +18,7 @@ figma.showUI(__html__, { width: 480, height: 640 });
 
 const ws = WebSocketClient.getInstance();
 
-// UI로부터의 메시지 처리
+// handle messages from UI
 figma.ui.onmessage = async (msg: PluginMessage) => {
   if (msg.type === 'init') {
     try {
@@ -63,11 +63,11 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
       await figma.clientStorage.setAsync('dimensions', dimensions);
 
-      // WebSocket 연결 상태 확인 및 로깅 추가
+      // check WebSocket connection status and log
       console.log('WebSocket ready state:', ws.readyState);
 
       try {
-        // UI를 통해 WebSocket 메시지 전송
+        // send message to WebSocket via UI
         figma.ui.postMessage({
           type: 'websocket-send',
           data: {
@@ -142,7 +142,7 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
     try {
       const modelInstance = await createModelInstance();
 
-      // UI로 모델 인스턴스 직접 전송
+      // send model instance directly to UI
       figma.ui.postMessage({
         type: 'model-instance-created',
         payload: modelInstance,

@@ -1,138 +1,115 @@
-# Figma Explorer Plugin
+# Klever UT (Usability Test) Plugin for Figma
 
-This Figma plugin allows users to explore and analyze Figma designs using AI-powered insights.
+Klever UT is a Figma plugin that automates usability testing of Figma designs using AI technology.
 
-## Features
+## Key Features
 
-- Initialize plugin with a Figma URL
-- Start and stop design exploration
-- Define custom tasks and personas for exploration
-- Real-time status updates
-- Automatic report generation and visualization in Figma
+- **Real-time Design Exploration**: Real-time design analysis through WebSocket
+- **Automated Usability Testing**: AI explores designs based on specified tasks and personas
+- **Visual Feedback**: Visualizes exploration process and results in Figma frames
+- **Detailed Reports**: Provides detailed analysis results for each step
 
-## Quick Start
+## Getting Started
 
-1. Install dependencies: `yarn`
+1. **Install Dependencies**
+   ```bash
+   yarn install
+   yarn build:watch  # Start development build with auto-reload
+   ```
 
-2. In Figma, go to `Plugins` -> `Development` -> `Import plugin from manifest...` and select the `manifest.json` file from this repository.
+2. **Add to Figma**
+   - In Figma, select `Plugins` → `Development` → `Import plugin from manifest...`
+   - Choose the `manifest.json` file from the project
 
-3. Run the plugin in Figma to start exploring your designs.
+3. **Check Server Connection**
+   - Verify connection status indicator in the top right when running the plugin
+   - Click reconnect button if connection issues occur
 
-## How It Works
+## How to Use
 
-1. **Initialization**: Enter a Figma URL to connect the plugin to your design file.
+### 1. Initialization
+- Enter Figma file URL
+- Input password if required
+- Verify connection status
 
-2. **Exploration**: Provide a task description and persona description to start the AI-powered exploration.
+### 2. Task Configuration
+- Enter test task description
+- Set persona (optional)
+- Start exploration
 
-3. **Real-time Updates**: The plugin polls the server for updates every 10 seconds, visualizing the exploration progress directly in your Figma file.
-
-4. **Report Generation**: As the exploration progresses, the plugin creates and updates frames in Figma to display the findings.
-
+### 3. Report Generation
+- Monitor real-time exploration progress
+- Review automatically generated analysis frames
+- Check final report
 
 ## System Architecture
 
-Below is a UML sequence diagram illustrating the interaction between the Figma Plugin, Flask Server, Figma Plugin API, and OpenAI:
+### Core Components
+1. **React UI (src/app)**
+   - Step components (InitStep, TaskStep, ReportStep)
+   - Modal components (ConfirmModal, PersonaModal)
+   - State management (WebSocket, exploration progress)
 
-![System Architecture UML](uml.png)
-<!-- 
-<pre>
-@startuml
+2. **Figma Plugin Core (src/plugin)**
+   - Figma API communication
+   - Frame creation and management
+   - Image processing
+
+3. **WebSocket Communication**
+   - Real-time status updates
+   - AI model communication
+   - Action execution and result collection
+
+### Exploration Process
+
+```mermaid
+sequenceDiagram
 participant User
-participant "self_explorer_figma.py" as Main
-participant "Chrome API" as SeleniumController
-participant "Figma Rest API" as FigmaAPI
-participant "File Cache" as FileCache
-participant "Language Model" as LanguageModel
-
-User -> Main: Run script with --url, --task_desc, --persona_desc
-activate Main
-
-Main -> FigmaAPI: Get Figma file data
-activate FigmaAPI
-FigmaAPI -> Main: File data
-deactivate FigmaAPI
-
-Main -> FileCache: Save file data as JSON
-activate FileCache
-FileCache -> Main: File data saved
-deactivate FileCache
-
-Main -> SeleniumController: Create SeleniumController object
-activate SeleniumController
-SeleniumController -> Main: SeleniumController instance
-deactivate SeleniumController
-
-Main -> SeleniumController: Open Chrome and navigate to URL
-activate SeleniumController
-SeleniumController -> Main: Browser opened and navigated
-deactivate SeleniumController
-
-Main -> Main: Print task description
-
-Main -> Main: Print persona description (if provided)
-
-loop until task_complete or max_rounds reached
-  Main -> SeleniumController: Take screenshot before action
-  activate SeleniumController
-
-  SeleniumController -> Main: Screenshot before action
-  deactivate SeleniumController
-
-  Main -> FileCache: Get current node data from saved JSON
-  activate FileCache
-  FileCache -> Main: Node data
-  deactivate FileCache
-
-  Main -> Main: Create list of UI elements
-
-  Main -> Main: Draw bounding boxes on screenshot
-
-  Main -> LanguageModel: Get model response for exploration
-  activate LanguageModel
-  LanguageModel -> Main: Model response
-  deactivate LanguageModel
-
-  Main -> Main: Parse exploration response
-
-  alt act_name in ["tap", "long_press", "swipe"]
-    Main -> SeleniumController: Perform action (tap, long_press, or swipe)
-    activate SeleniumController
-    SeleniumController -> Main: Action performed
-    deactivate SeleniumController
-  else
-    Main -> Main: Break loop
-  end
-
-  Main -> SeleniumController: Take screenshot after action
-  activate SeleniumController
-  SeleniumController -> Main: Screenshot after action
-  deactivate SeleniumController
-
-  Main -> LanguageModel: Get model response for reflection
-  activate LanguageModel
-  LanguageModel -> Main: Model response
-  deactivate LanguageModel
-
-  Main -> Main: Parse reflection response
-
-  alt decision in ["BACK", "CONTINUE", "SUCCESS"]
-    Main -> Main: Generate and save documentation
-  else
-    Main -> Main: Handle error or ineffective action
-  end
+participant Plugin
+participant Server
+participant AI
+User->>Plugin: Configure task
+Plugin->>Server: WebSocket connection
+loop Exploration rounds
+Plugin->>Server: Send screenshot
+Server->>AI: Request analysis
+AI->>Server: Recommend action
+Server->>Plugin: Execute action
+Plugin->>Plugin: Visualize results
 end
+Plugin->>User: Final report
+```
 
-Main -> User: Print exploration result and generated docs count
-@enduml
-</pre>
--->
 
-## Plugin Structure
+## Development Notes
 
-- `src/plugin/controller.ts`: Handles communication between Figma and the server, manages report polling, and creates Figma elements.
-- `src/app/components/App.tsx`: Defines the plugin's user interface using React and Material-UI components.
+- WebSocket connection set to `localhost:8080`
+- Maximum exploration rounds: 30
+- Inefficient action caching prevents duplicate exploration
+- Event-driven architecture for real-time status updates
 
-## Note
+## Important Notes
 
-This plugin requires a separate server component to function. Ensure the server is running and accessible at `http://localhost:5000` before using the plugin.
+- Server must be running to use the plugin
+- Stable network connection required
+- Initial loading time may be longer for large Figma files
+- All WebSocket communications are restricted to localhost for security
 
+## Technical Requirements
+
+- Node.js 14+
+- Yarn package manager
+- Modern web browser
+- Active Figma account with plugin development permissions
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a new Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.

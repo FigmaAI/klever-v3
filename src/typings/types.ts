@@ -14,7 +14,7 @@ export interface WSMessage {
   payload?: InitResponse | ScreenshotInfo | ErrorPayload | ExploreResponse | ReflectionFramesResult;
 }
 
-// 기본 인터페이스
+// basic interface
 export interface ScreenshotInfo {
   nodeId: string;
   imageData: string;
@@ -37,7 +37,7 @@ export interface TaskData {
   personaDesc?: string;
 }
 
-// AI 모델 관련
+// AI model related
 export interface AIModelConfig {
   model?: string;
   temperature?: number;
@@ -64,7 +64,7 @@ export interface ExploreResponse {
   summary: string;
 }
 
-// 초기화 응답
+// initialize response
 export interface InitResponse {
   fileKey: string;
   message: string;
@@ -77,7 +77,7 @@ export interface InitResponse {
   };
 }
 
-// 플러그인 메시지 타입
+// plugin message type
 export type PluginMessage =
   | { type: 'init'; url: string; password: string }
   | { type: 'saveApiKey'; data: string }
@@ -158,7 +158,7 @@ export interface ErrorPayload {
   message: string;
 }
 
-// Preview 프레임 생성 결과를 위한 인터페이스 추가
+// interface for preview frame creation result
 export interface PreviewFramesResult {
   previewFrameId: string;
   labeledImageFrameBase64: string;

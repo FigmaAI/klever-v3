@@ -1,11 +1,11 @@
-import { UIElement, ImageDimensions, ScreenshotInfo, TaskData, ExploreResponse } from '../typings/types';
+import { UIElement, ImageDimensions, ScreenshotInfo, TaskData, ExploreResponse, PluginMessage } from '../typings/types';
 
 // Basic UI creation utilities
 export function createText(
   characters: string,
   fontSize: number,
   fontStyle: 'Regular' | 'Bold',
-  color: string | { r: number; g: number; b: number } = '#000000' // 헥스 코드나 RGB 객체 모두 받을 수 있음
+  color: string | { r: number; g: number; b: number } = '#000000' // hex code or RGB object
 ): TextNode {
   const rgbColor = typeof color === 'string' ? hexToRgb(color) : color;
 
@@ -47,9 +47,9 @@ export function hexToRgb(hex: string) {
 export function createTextFrame(
   title: string,
   content: string,
-  color: string | { r: number; g: number; b: number } = '#000000' // 헥스 코드나 RGB 객체 모두 받을 수 있음
+  color: string | { r: number; g: number; b: number } = '#000000' // hex code or RGB object
 ): FrameNode {
-  // 컬러 처리
+  // color handling
   const rgbColor = typeof color === 'string' ? hexToRgb(color) : color;
 
   const frame = figma.createFrame();
@@ -143,7 +143,7 @@ export function createAnatomyFrame(): FrameNode {
   frame.name = 'anatomy';
   frame.layoutMode = 'VERTICAL';
   frame.paddingTop = frame.paddingBottom = frame.paddingLeft = frame.paddingRight = 64;
-  frame.itemSpacing = 32; // 상호 간격 설정
+  frame.itemSpacing = 32; // spacing between items
   frame.primaryAxisSizingMode = 'AUTO';
   frame.counterAxisSizingMode = 'AUTO';
 
@@ -228,7 +228,7 @@ export async function createLabeledImageFrame(
     elemFrame.primaryAxisSizingMode = 'AUTO';
     elemFrame.counterAxisSizingMode = 'AUTO';
 
-    // 요소의 위치 계산 (offset 없이 직접 bbox 값 사용)
+    // calculate element position (use bbox values directly without offset)
     elemFrame.x = elem.bbox.x + elem.bbox.width / 2 - 8;
     elemFrame.y = elem.bbox.y + elem.bbox.height / 2 - 8;
 
@@ -272,10 +272,10 @@ export function parseReflectRsp(rsp: string) {
   try {
     console.log('Raw reflection response:', rsp);
     
-    // 시작과 끝의 따옴표 제거
+    // remove quotes at the beginning and end
     const cleanedRsp = rsp.replace(/^"|"$/g, '');
     
-    // Decision과 Thought를 구분 (이스케이프된 \n 처리)
+    // separate Decision and Thought (handle escaped \n)
     const decisionMatch = cleanedRsp.match(/Decision:\s*([^\\]*?)(?=\\n)/);
     const thoughtMatch = cleanedRsp.match(/Thought:\s*([\s\S]*?)(?:\\n|$)/);
 
@@ -285,7 +285,7 @@ export function parseReflectRsp(rsp: string) {
       throw new Error('Failed to parse reflection decision');
     }
 
-    // 중복된 텍스트 제거 및 정리
+    // remove duplicate text and clean up
     const decision = decisionMatch[1].trim();
     const thought = thoughtMatch ? 
       thoughtMatch[1].replace(/\\n/g, '\n').trim() : 
@@ -307,7 +307,7 @@ export function parseReflectRsp(rsp: string) {
   }
 }
 
-// 새로운 함수들
+// new functions
 export function createModelResponseFrame(
   observation: string,
   thought: string,
@@ -434,7 +434,7 @@ function createTouchPoint(selectedElem: UIElement): EllipseNode {
   return touchPoint;
 }
 
-// UT Reports 프레임 생성 함수
+// create UT Reports frame
 function createUTReportsFrame(): FrameNode {
   const frame = figma.createFrame();
   frame.name = 'UT Reports';
@@ -447,14 +447,14 @@ function createUTReportsFrame(): FrameNode {
   return frame;
 }
 
-// UT Reports 프레임 가져오기 또는 생성 함수
+// get or create UT Reports frame
 async function getOrCreateUTReportsFrame(): Promise<FrameNode> {
-  // 현재 페이지에서 'UT Reports' 프레임 찾기
+  // find 'UT Reports' frame in current page
   const utReportsFrame = figma.currentPage.findChild(
     (node) => node.type === 'FRAME' && node.name === 'UT Reports'
   ) as FrameNode;
 
-  // 없으면 새로 생성
+  // if not found, create new one
   if (!utReportsFrame) {
     const frame = createUTReportsFrame();
     figma.currentPage.appendChild(frame);
@@ -466,10 +466,10 @@ async function getOrCreateUTReportsFrame(): Promise<FrameNode> {
 
 // createTaskFrameWithNameAndDesc 함수 수정
 export async function createTaskFrameWithNameAndDesc(taskData: TaskData): Promise<FrameNode> {
-  // UT Reports 프레임 가져오기 또는 생성
+  // get or create UT Reports frame
   const utReportsFrame = await getOrCreateUTReportsFrame();
 
-  // Generate timestamp-based name
+  // generate timestamp-based name
   const now = new Date();
   const taskName = `self_explore_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
     now.getDate()
@@ -479,14 +479,14 @@ export async function createTaskFrameWithNameAndDesc(taskData: TaskData): Promis
 
   const taskFrame = createTaskFrame(taskName);
 
-  // Task Frame을 UT Reports 프레임에 추가
+  // add task frame to UT Reports frame
   utReportsFrame.appendChild(taskFrame);
 
-  // Node Name 추가
+  // add node name
   const nameFrame = createNameFrame(taskName);
   taskFrame.appendChild(nameFrame);
 
-  // Task Description 추가
+  // add task description
   const taskDescFrame = createTaskDescFrame(taskData);
   taskFrame.appendChild(taskDescFrame);
 
@@ -590,9 +590,9 @@ export function createTaskDescFrame(taskData: TaskData) {
 
 export function parseAction(action: string): { actName: string; args: string } {
     try {
-        console.log('Parsing action:', action);  // 디버깅을 위한 로그 추가
+        console.log('Parsing action:', action);  // log for debugging
         
-        // 이스케이프된 따옴표 처리
+        // handle escaped quotes
         const cleanedAction = action.replace(/\\"/g, '"');
         console.log('Cleaned action:', cleanedAction);
         
@@ -604,9 +604,9 @@ export function parseAction(action: string): { actName: string; args: string } {
 
         const [_, actName, args] = actMatch;
         
-        // text 액션의 경우 특별 처리
+        // special handling for text action
         if (actName === 'text') {
-            // text 액션은 area와 input string을 분리할 필요가 없음
+            // text action doesn't need to separate area and input string
             return { actName, args: args.trim() };
         }
         
@@ -656,3 +656,15 @@ export function createReflectionResponseFrame(decision: string, thought: string)
 
   return frame;
 }
+
+// Add message handler utilities
+export const sendPluginMessage = (type: PluginMessage['type'], payload?: any) => {
+    parent.postMessage({ 
+        pluginMessage: { type, ...payload }
+    }, '*');
+};
+
+export const handlePluginError = (message: string) => {
+    console.error(message);
+    sendPluginMessage('error', { message });
+};

@@ -1,5 +1,5 @@
 export class WebSocketClient {
-    // WebSocket 상태 상수 정의
+    // WebSocket status constants
     private static readonly CLOSED = 3;
     private static instance: WebSocketClient;
     private ws: WebSocket | null = null;
@@ -48,7 +48,7 @@ export class WebSocketClient {
         return () => this.removeListener(callback);
     }
 
-    // UI로부터 받은 WebSocket 응답을 처리
+    // handle WebSocket response from UI
     public handleUIMessage(response: any) {
         this.listeners.forEach(listener => listener(response));
     }
