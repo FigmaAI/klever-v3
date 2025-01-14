@@ -589,18 +589,33 @@ export function createTaskDescFrame(taskData: TaskData) {
 }
 
 export function parseAction(action: string): { actName: string; args: string } {
-  try {
-    const actMatch = action.match(/(\w+)\((.*)\)/);
-    if (!actMatch) {
-      throw new Error('Invalid action format');
-    }
+    try {
+        console.log('Parsing action:', action);  // 디버깅을 위한 로그 추가
+        
+        // 이스케이프된 따옴표 처리
+        const cleanedAction = action.replace(/\\"/g, '"');
+        console.log('Cleaned action:', cleanedAction);
+        
+        const actMatch = cleanedAction.match(/(\w+)\((.*)\)/);
+        if (!actMatch) {
+            console.error('Invalid action format:', cleanedAction);
+            throw new Error('Invalid action format');
+        }
 
-    const [_, actName, args] = actMatch;
-    return { actName, args };
-  } catch (error) {
-    console.error('Error in parseAction:', error);
-    return { actName: 'FINISH', args: '' };
-  }
+        const [_, actName, args] = actMatch;
+        
+        // text 액션의 경우 특별 처리
+        if (actName === 'text') {
+            // text 액션은 area와 input string을 분리할 필요가 없음
+            return { actName, args: args.trim() };
+        }
+        
+        return { actName, args: args.trim() };
+    } catch (error) {
+        console.error('Error in parseAction:', error);
+        console.error('Original action:', action);
+        return { actName: 'FINISH', args: '' };
+    }
 }
 
 export async function createReflectionFrames(

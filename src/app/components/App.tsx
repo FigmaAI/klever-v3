@@ -2,7 +2,6 @@ import * as React from 'react';
 import { CssVarsProvider } from '@mui/joy/styles';
 import {
   Typography,
-  Button,
   Stepper,
   Step,
   StepIndicator,
@@ -11,16 +10,15 @@ import {
 import {
   DesignServicesOutlined,
   AddLinkOutlined,
-  PhotoFilterOutlined,
-  Key
+  PhotoFilterOutlined
 } from '@mui/icons-material';
 import { handlePluginError } from '../../utils/messageHandlers';
 import { WSMessage, InitResponse, WSMessageType, ScreenshotInfo, TaskData, UIElement, ErrorPayload, PreviewFramesResult, ReflectionFramesResult, responsePayload } from '../../typings/types';
-import { ApiKeyCard, InitStep, TaskStep, ReportStep } from './steps';
-import { ConfirmModal, PersonaModal, ApiKeyModal } from './modals';
-import { createPromptForTask, AIModel, parseExploreRsp, createPromptForReflection } from '../../plugin';
+import { InitStep, TaskStep, ReportStep } from './steps';
+import { ConfirmModal, PersonaModal } from './modals';
+import { createPromptForTask, parseExploreRsp, createPromptForReflection } from '../../plugin';
 import { parseAction, parseReflectRsp } from '../../plugin/FigmaUtils';
-
+import WebSocketStatus from './WebSocketStatus';
 
 const App = () => {
   const [activeStep, setActiveStep] = React.useState(0);
@@ -34,95 +32,91 @@ const App = () => {
   const [personaModalOpen, setPersonaModalOpen] = React.useState(false);
   const [personaDesc, setPersonaDesc] = React.useState('');
   const [isConnecting, setIsConnecting] = React.useState(false);
-  const [apiKeyModalOpen, setApiKeyModalOpen] = React.useState(false);
-  const [apiKey, setApiKey] = React.useState('');
-  const [currentApiKey, setCurrentApiKey] = React.useState<string>('');
   const [loadingMessage, setLoadingMessage] = React.useState<string>('');
   const [isInterviewing, setIsInterviewing] = React.useState(false);
   const ws = React.useRef<WebSocket | null>(null);
   const nodeElemListCache = React.useRef<Map<string, UIElement[]>>(new Map());
+  const [wsConnected, setWsConnected] = React.useState(false);
 
   React.useEffect(() => {
     dataRef.current = data;
   }, [data]);
 
-  React.useEffect(() => {
-    if (!currentApiKey) {
-      parent.postMessage({ pluginMessage: { type: 'getCurrentApiKey' } }, '*');
-    } else {
-      parent.postMessage({ pluginMessage: { type: 'get-model-instance' } }, '*');
+  // 플러그인 메시지 핸들러를 컴포넌트 레벨로 이동
+  const handlePluginMessage = React.useCallback((event: MessageEvent) => {
+    if (event.data.pluginMessage) {
+      const msg = event.data.pluginMessage;
+      if (msg.type === 'websocket-send' && ws.current?.readyState === WebSocket.OPEN) {
+        console.log('Sending WebSocket message:', msg.data);
+        ws.current.send(JSON.stringify(msg.data));
+      }
     }
-  }, [currentApiKey]);
+  }, []);
 
-  React.useEffect(() => {
-    // WebSocket 연결 설정
+  // WebSocket 연결 관리
+  const connectWebSocket = React.useCallback(() => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.close();
+    }
+
     ws.current = new WebSocket('ws://localhost:8080');
 
-    // WebSocket 연결 상태 확인
     ws.current.onopen = () => {
       console.log('WebSocket connected');
+      setWsConnected(true);
     };
 
-    // 플러그인 메시지 처리
-    const handlePluginMessage = (event) => {
-      if (event.data.pluginMessage) {
-        const msg = event.data.pluginMessage;
+    ws.current.onclose = () => {
+      console.log('WebSocket disconnected');
+      setWsConnected(false);
+    };
 
-        if (msg.type === 'currentApiKey') {
-          setCurrentApiKey(msg.message);
-        } else if (msg.type === 'model-instance-created') {
-          console.log('Creating model instance with config:', msg.payload);
-          const model = new AIModel(msg.payload);  // AIModel 인스턴스 직접 생성
-          console.log('Model instance created:', model);
-        } else if (msg.type === 'websocket-send') {
-          // WebSocket 메시지 전송 처리
-          if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-            console.log('Sending WebSocket message:', msg.data);
-            ws.current.send(JSON.stringify(msg.data));
-          } else {
-            console.error('WebSocket is not connected');
-            handlePluginError('WebSocket is not connected');
-          }
+    // WebSocket 메시지 수신 처리
+    ws.current.onmessage = (event) => {
+      const response = JSON.parse(event.data) as WSMessage;
+      console.log('WebSocket message received:', response);
+
+      if (response.type === "INIT") {
+        setIsConnecting(false);
+        if (response.status === 'success' && response.payload) {
+          console.log('Init successful, setting activeStep to 1', response.payload);
+          const initResponse = response.payload as InitResponse;
+          setData(initResponse);
+          setActiveStep(1);
+        } else {
+          console.log('Init failed:', response.payload);
+          const payload = response.payload as ErrorPayload;
+          const errorMessage = payload?.message || 'Initialization failed';
+          handlePluginError(errorMessage);
         }
       }
     };
 
-      // WebSocket 메시지 수신 처리
-      ws.current.onmessage = (event) => {
-        const response = JSON.parse(event.data) as WSMessage;
-        console.log('WebSocket message received:', response);
+    // WebSocket 에러 처리
+    ws.current.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      setIsConnecting(false);
+      handlePluginError('WebSocket connection error');
+    };
+  }, []);
 
-        if (response.type === "INIT") {
-          setIsConnecting(false);
-          if (response.status === 'success' && response.payload) {
-            console.log('Init successful, setting activeStep to 1', response.payload);
-            const initResponse = response.payload as InitResponse;
-            setData(initResponse);
-            setActiveStep(1);
-            
-            console.log('ActiveStep should now be 1');
-          } else {
-            console.log('Init failed:', response.payload);
-            const payload = response.payload as ErrorPayload;
-            const errorMessage = payload?.message || 'Initialization failed';
-            handlePluginError(errorMessage);
-          }
-        }
-      };
+  // 플러그인 메시지 리스너 등록
+  React.useEffect(() => {
+    window.addEventListener('message', handlePluginMessage);
+    return () => {
+      window.removeEventListener('message', handlePluginMessage);
+    };
+  }, [handlePluginMessage]);
 
-      // WebSocket 에러 처리
-      ws.current.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setIsConnecting(false);
-        handlePluginError('WebSocket connection error');
-      };
-
-      window.addEventListener('message', handlePluginMessage);
-      return () => {
-        window.removeEventListener('message', handlePluginMessage);
-        ws.current?.close();
-      };
-    }, []);
+  // WebSocket 초기 연결
+  React.useEffect(() => {
+    connectWebSocket();
+    return () => {
+      if (ws.current?.readyState === WebSocket.OPEN) {
+        ws.current.close();
+      }
+    };
+  }, [connectWebSocket]);
 
   const handleInit = async () => {
     if (isConnecting) return;
@@ -230,7 +224,7 @@ const App = () => {
         resolve(filteredList);
         return;
       }
-      
+
       const handleElemListCreation = (event: MessageEvent) => {
         if (event.data.pluginMessage?.type === 'elem-list-created') {
           window.removeEventListener('message', handleElemListCreation);
@@ -245,7 +239,7 @@ const App = () => {
       };
 
       window.addEventListener('message', handleElemListCreation);
-      
+
       parent.postMessage({
         pluginMessage: {
           type: 'create-elem-list',
@@ -264,14 +258,14 @@ const App = () => {
       let lastAct = "None";
       const maxRounds = 30;  // 하드코딩 (추후 Init 시점에서 받아올 예정)
       const uselessList = new Set<string>();
-      
+
       console.log('Starting exploration:', { round: 1, maxRounds });
 
       while (!taskComplete && round <= maxRounds) {
         // 1. Get initial screenshot
         setLoadingMessage(`Round ${round}: Getting initial screenshot...`);
         const beforeScreenshot = await requestScreenshot(`${round}_before`);
-        
+
         // 2. Get elemList for current node
         const elemList = await getElemList(beforeScreenshot.nodeId, uselessList);
 
@@ -284,7 +278,7 @@ const App = () => {
               anatomyFrameId,
               roundCount: round,
               screenshotInfo: beforeScreenshot,
-              elemList: elemList 
+              elemList: elemList
             }
           }
         }, '*');
@@ -306,34 +300,34 @@ const App = () => {
         // 4. Get AI response
         setLoadingMessage(`Round ${round}: Getting AI response...`);
         const exploreResponse = await new Promise<any>((resolve, reject) => {
-            if (!ws.current) return reject('No WebSocket connection');
+          if (!ws.current) return reject('No WebSocket connection');
 
-            // 프롬프트 생성 및 준비
-            let prompt = createPromptForTask(taskData);
-            prompt = prompt.replace('<last_act>', lastAct || 'None');
+          // 프롬프트 생성 및 준비
+          let prompt = createPromptForTask(taskData);
+          prompt = prompt.replace('<last_act>', lastAct || 'None');
 
-            // WebSocket으로 서버에 전송
-            ws.current.send(JSON.stringify({
-                type: WSMessageType.EXPLORE,
-                payload: {
-                    prompt: prompt,
-                    imageBase64: [previewData.labeledImageFrameBase64]
-                }
-            }));
+          // WebSocket으로 서버에 전송
+          ws.current.send(JSON.stringify({
+            type: WSMessageType.EXPLORE,
+            payload: {
+              prompt: prompt,
+              imageBase64: [previewData.labeledImageFrameBase64]
+            }
+          }));
 
-            const handleResponse = (event: MessageEvent) => {
-                const data: responsePayload = JSON.parse(event.data);
-                console.log('Received response:', data);
-                if (data.type === WSMessageType.EXPLORE) {
-                    ws.current?.removeEventListener('message', handleResponse);
-                    if (data.status === 'success') {
-                        resolve(data.payload);
-                    } else {
-                        reject(data.payload?.message || 'Exploration failed');
-                    }
-                }
-            };
-            ws.current.addEventListener('message', handleResponse);
+          const handleResponse = (event: MessageEvent) => {
+            const data: responsePayload = JSON.parse(event.data);
+            console.log('Received response:', data);
+            if (data.type === WSMessageType.EXPLORE) {
+              ws.current?.removeEventListener('message', handleResponse);
+              if (data.status === 'success') {
+                resolve(data.payload);
+              } else {
+                reject(data.payload?.message || 'Exploration failed');
+              }
+            }
+          };
+          ws.current.addEventListener('message', handleResponse);
         });
 
         if (!exploreResponse) {
@@ -383,7 +377,7 @@ const App = () => {
           try {
             const { area, rest } = parseAreaNumber(args);
             const elem = elemList[area];
-            
+
             if (!elem) {
               throw new Error(`Element not found at index ${area}`);
             }
@@ -456,35 +450,36 @@ const App = () => {
 
         // Create reflection AI prompt and get AI response
         const reflectionResponse = await new Promise<any>((resolve, reject) => {
-            if (!ws.current) return reject('No WebSocket connection');
+          if (!ws.current) return reject('No WebSocket connection');
 
-            // 프롬프트 생성
-            let prompt = createPromptForReflection(taskData);
-            prompt = prompt
-                .replace('<last_act>', lastAct)
-                .replace('<action>', actName)
-                .replace('<ui_element>', area.toString());
+          const handleResponse = (event: MessageEvent) => {
+            const data: responsePayload = JSON.parse(event.data);
+            if (data.type === WSMessageType.REFLECT) {
+              ws.current?.removeEventListener('message', handleResponse);
+              if (data.status === 'success') {
+                resolve(data.payload);
+              } else {
+                reject(data.payload?.message || 'Reflection failed');
+              }
+            }
+          };
 
-            ws.current.send(JSON.stringify({
-                type: WSMessageType.REFLECT,
-                payload: {
-                    prompt: prompt,
-                    imageBase64: [previewData.labeledImageFrameBase64, reflectionData.labeledImageFrameBase64],
-                }
-            }));
+          ws.current.addEventListener('message', handleResponse);
+          // 프롬프트 생성
+          let prompt = createPromptForReflection(taskData);
+          prompt = prompt
+            .replace('<last_act>', lastAct)
+            .replace('<action>', actName)
+            .replace('<ui_element>', area.toString());
 
-            const handleResponse = (event: MessageEvent) => {
-                const data: responsePayload = JSON.parse(event.data);
-                if (data.type === WSMessageType.REFLECT) {
-                    ws.current?.removeEventListener('message', handleResponse);
-                    if (data.status === 'success') {
-                        resolve(data.payload);
-                    } else {
-                        reject(data.payload?.message || 'Reflection failed');
-                    }
-                }
-            };
-            ws.current.addEventListener('message', handleResponse);
+          // 요청 전송
+          ws.current.send(JSON.stringify({
+            type: WSMessageType.REFLECT,
+            payload: {
+              prompt: prompt,
+              imageBase64: [previewData.labeledImageFrameBase64, reflectionData.labeledImageFrameBase64],
+            }
+          }));
         });
 
         console.log('Reflection data:', reflectionData);
@@ -637,7 +632,7 @@ const App = () => {
   const handleConfirmReset = () => {
     resetState();
     if (ws.current) {
-      ws.current.send(JSON.stringify({ 
+      ws.current.send(JSON.stringify({
         type: 'CLOSE',
         payload: {}
       }));
@@ -652,118 +647,92 @@ const App = () => {
     }
   };
 
-  // API 키 관리 함수들
-  const handleApiKeySubmit = () => {
-    if (apiKey.trim() !== '') {
-      parent.postMessage({ pluginMessage: { type: 'saveApiKey', data: apiKey } }, '*');
-      setApiKeyModalOpen(false);
-      setApiKey('');
-    }
-  };
-
-  const handleApiKeyDelete = () => {
-    parent.postMessage({ pluginMessage: { type: 'deleteApiKey' } }, '*');
-    setApiKey('');
-    setCurrentApiKey('');
-  };
-
-  const handleOpenApiKeyModal = () => {
-    setApiKey(currentApiKey);
-    setApiKeyModalOpen(true);
-  };
-
-  const handleCloseApiKeyModal = () => {
-    setApiKeyModalOpen(false);
-    setApiKey('');
-  };
-
   return (
     <CssVarsProvider>
-      <Box sx={{ maxWidth: 600, mx: 'auto', px: 2 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-          <Button
-            variant="outlined"
-            color="neutral"
-            onClick={handleOpenApiKeyModal}
-            startDecorator={<Key />}
-            size="sm"
-          >
-            {currentApiKey ? 'Manage API Key' : 'Set API Key'}
-          </Button>
+      <Box sx={{ p: 2 }}>
+        <Box sx={{ 
+          display: 'flex', 
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          mb: 2 
+        }}>
+          <Typography level="h4" component="h1">
+            Get Usability Test report
+          </Typography>
+          <WebSocketStatus 
+            isConnected={wsConnected}
+            onReconnect={connectWebSocket}
+          />
         </Box>
 
-        {!currentApiKey ? (
-          <ApiKeyCard onSetApiKey={() => setApiKeyModalOpen(true)} />
-        ) : (
-          <Stepper orientation="vertical">
-            <Step
-              active={activeStep === 0}
-              completed={activeStep > 0}
-              indicator={
-                <StepIndicator variant={activeStep === 0 ? 'solid' : 'soft'} color="primary">
-                  <AddLinkOutlined />
-                </StepIndicator>
-              }
-            >
-              <Typography level="title-md">Step 1</Typography>
-              {activeStep === 0 && (
-                <InitStep
-                  url={url}
-                  password={password}
-                  isConnecting={isConnecting}
-                  onUrlChange={setUrl}
-                  onPasswordChange={setPassword}
-                  onInit={handleInit}
-                  onBack={handleBack}
-                />
-              )}
-            </Step>
+        <Stepper orientation="vertical">
+          <Step
+            active={activeStep === 0}
+            completed={activeStep > 0}
+            indicator={
+              <StepIndicator variant={activeStep === 0 ? 'solid' : 'soft'} color="primary">
+                <AddLinkOutlined />
+              </StepIndicator>
+            }
+          >
+            <Typography level="title-md">Step 1</Typography>
+            {activeStep === 0 && (
+              <InitStep
+                url={url}
+                password={password}
+                isConnecting={isConnecting}
+                onUrlChange={setUrl}
+                onPasswordChange={setPassword}
+                onInit={handleInit}
+                onBack={handleBack}
+              />
+            )}
+          </Step>
 
-            <Step
-              active={activeStep === 1}
-              completed={activeStep > 1}
-              indicator={
-                <StepIndicator variant={activeStep === 1 ? 'solid' : 'soft'} color="primary">
-                  <DesignServicesOutlined />
-                </StepIndicator>
-              }
-            >
-              <Typography level="title-md">Step 2</Typography>
-              {activeStep === 1 && (
-                <TaskStep
-                  taskDesc={taskDesc}
-                  personaDesc={personaDesc}
-                  isConnecting={isConnecting}
-                  onTaskDescChange={setTaskDesc}
-                  onPersonaClick={() => setPersonaModalOpen(true)}
-                  onExplore={handleExplore}
-                  onBack={handleBack}
-                  onKeyDown={handleKeyDown}
-                />
-              )}
-            </Step>
+          <Step
+            active={activeStep === 1}
+            completed={activeStep > 1}
+            indicator={
+              <StepIndicator variant={activeStep === 1 ? 'solid' : 'soft'} color="primary">
+                <DesignServicesOutlined />
+              </StepIndicator>
+            }
+          >
+            <Typography level="title-md">Step 2</Typography>
+            {activeStep === 1 && (
+              <TaskStep
+                taskDesc={taskDesc}
+                personaDesc={personaDesc}
+                isConnecting={isConnecting}
+                onTaskDescChange={setTaskDesc}
+                onPersonaClick={() => setPersonaModalOpen(true)}
+                onExplore={handleExplore}
+                onBack={handleBack}
+                onKeyDown={handleKeyDown}
+              />
+            )}
+          </Step>
 
-            <Step
-              active={activeStep === 2}
-              completed={activeStep > 2}
-              indicator={
-                <StepIndicator variant={activeStep === 2 ? 'solid' : 'soft'} color="primary">
-                  <PhotoFilterOutlined />
-                </StepIndicator>
-              }
-            >
-              <Typography level="title-md">Step 3</Typography>
-              {activeStep === 2 && (
-                <ReportStep
-                  isInterviewing={isInterviewing}
-                  loadingMessage={loadingMessage}
-                  onBack={handleBack}
-                  onReset={handleConfirmReset}
-                />
-              )}
-            </Step>
-          </Stepper>
-        )}
+          <Step
+            active={activeStep === 2}
+            completed={activeStep > 2}
+            indicator={
+              <StepIndicator variant={activeStep === 2 ? 'solid' : 'soft'} color="primary">
+                <PhotoFilterOutlined />
+              </StepIndicator>
+            }
+          >
+            <Typography level="title-md">Step 3</Typography>
+            {activeStep === 2 && (
+              <ReportStep
+                isInterviewing={isInterviewing}
+                loadingMessage={loadingMessage}
+                onBack={handleBack}
+                onReset={handleConfirmReset}
+              />
+            )}
+          </Step>
+        </Stepper>
 
         <ConfirmModal
           open={confirmResetModalOpen}
@@ -790,16 +759,6 @@ const App = () => {
             setPersonaDesc('');
             setPersonaModalOpen(false);
           }}
-        />
-
-        <ApiKeyModal
-          open={apiKeyModalOpen}
-          apiKey={apiKey}
-          currentApiKey={currentApiKey}
-          onClose={handleCloseApiKeyModal}
-          onChange={(e) => setApiKey(e)}
-          onSubmit={handleApiKeySubmit}
-          onDelete={handleApiKeyDelete}
         />
       </Box>
     </CssVarsProvider>
