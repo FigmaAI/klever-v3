@@ -255,7 +255,7 @@ const App = () => {
       let round = 1;
       let taskComplete = false;
       let lastAct = "None";
-      const maxRounds = 30;  // hardcoded for now, will be fetched from InitResponse later
+      const maxRounds = data?.maxRounds ?? 30;  // get from server through websocket
       const uselessList = new Set<string>();
 
       console.log('Starting exploration:', { round: 1, maxRounds });

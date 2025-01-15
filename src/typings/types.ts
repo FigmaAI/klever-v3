@@ -75,6 +75,7 @@ export interface InitResponse {
     width: number;
     height: number;
   };
+  maxRounds: number;
 }
 
 // plugin message type
