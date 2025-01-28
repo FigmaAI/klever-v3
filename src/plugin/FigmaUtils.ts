@@ -101,7 +101,7 @@ export async function createImageFrame(
   dimensions?: ImageDimensions
 ): Promise<FrameNode> {
   const frame = figma.createFrame();
-  frame.name = name;
+    frame.name = name;
   if (dimensions) {
     frame.resize(dimensions.width, dimensions.height);
   } else {
@@ -119,7 +119,7 @@ export async function createImageFrame(
     },
   ];
 
-  return frame;
+    return frame;
 }
 
 export function createBoundingBox(selectedElem: UIElement): RectangleNode {
@@ -134,8 +134,8 @@ export function createBoundingBox(selectedElem: UIElement): RectangleNode {
 }
 
 export async function loadFonts() {
-  await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
-  await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
+    await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+    await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
 }
 
 export function createAnatomyFrame(): FrameNode {
@@ -212,7 +212,7 @@ export async function createLabeledImageFrame(
   const imageHash = (await figma.createImageAsync(imageData)).hash;
   labeledFrame.fills = [
     {
-      type: 'IMAGE',
+    type: 'IMAGE',
       scaleMode: 'FILL',
       imageHash: imageHash,
     },
