@@ -248,16 +248,47 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
       });
     }
   } else if (msg.type === 'parse-reflect-rsp') {
-    const { previewFrameId, decision, thought } = msg.payload;
-    const previewFrame = (await figma.getNodeByIdAsync(previewFrameId)) as FrameNode;
+    try {
+      const { previewFrameId, decision, thought } = msg.payload;
+      const previewFrame = (await figma.getNodeByIdAsync(previewFrameId)) as FrameNode;
 
-    if (!previewFrame) throw new Error('Preview frame not found');
+      if (!previewFrame) throw new Error('Preview frame not found');
 
-    const reflectionResponseFrame = createReflectionResponseFrame(decision, thought);
-    previewFrame.appendChild(reflectionResponseFrame);
+      // 타임아웃이나 에러 상황에서 붉은 배경과 inner stroke 모두 적용
+      if (decision === 'INEFFECTIVE' || decision === 'BACK' || decision === undefined) {
+        // 어두운 붉은색 배경 설정
+        previewFrame.fills = [{
+          type: 'SOLID',
+          color: { r: 0.176, g: 0.102, b: 0.102 }, // #2D1A1A (어두운 붉은색)
+          opacity: 1
+        }];
+        
+        // 빨간색 inner stroke 설정
+        previewFrame.strokes = [{
+          type: 'SOLID',
+          color: { r: 1, g: 0, b: 0 }, // #FF0000 (순수한 빨간색)
+          opacity: 1
+        }];
+        previewFrame.strokeWeight = 4; // 4px 두께
+        previewFrame.strokeAlign = 'INSIDE'; // inner stroke
+      }
 
-    // Scroll to the preview frame
-    figma.viewport.scrollAndZoomIntoView([previewFrame]);
+      // thought가 undefined인 경우 기본 메시지 사용
+      const reflectionThought = thought || 'Action reflection failed due to timeout';
+      const reflectionDecision = decision || 'INEFFECTIVE';
+
+      const reflectionResponseFrame = createReflectionResponseFrame(
+        reflectionDecision, 
+        reflectionThought
+      );
+      
+      previewFrame.appendChild(reflectionResponseFrame);
+      figma.viewport.scrollAndZoomIntoView([previewFrame]);
+
+    } catch (error) {
+      console.error('Error in parse-reflect-rsp:', error);
+      figma.notify('Failed to process reflection response: ' + error.message, { error: true });
+    }
   } else if (msg.type === 'create-elem-list') {
     try {
       const { nodeId, uselessList } = msg;

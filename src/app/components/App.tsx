@@ -270,12 +270,14 @@ const App = () => {
 
         // 3. Create preview frames
         setLoadingMessage(`Round ${round}: Creating preview frame...`);
+        const createUniqueRoundId = (round: number) => `${round}_${Date.now()}`;
         parent.postMessage({
           pluginMessage: {
             type: 'create-preview-frames',
             data: {
               anatomyFrameId,
               roundCount: round,
+              roundId: createUniqueRoundId(round),
               screenshotInfo: beforeScreenshot,
               elemList: elemList
             }
@@ -366,7 +368,6 @@ const App = () => {
           }
         }
 
-
         if (actName === "FINISH") {
           taskComplete = true;
           break;
@@ -393,7 +394,7 @@ const App = () => {
                 payload: {
                   action: actName,
                   bbox: elem.bbox,
-                  screenshotArea: data.screenshotArea,  // add screenshotArea from InitResponse
+                  screenshotArea: data.screenshotArea,
                   ...(actName === 'swipe' && {
                     direction: rest[0]?.toLowerCase(),
                     distance: rest[1] || 'medium'
@@ -401,8 +402,13 @@ const App = () => {
                 }
               }));
 
-              // wait for action to be executed
-              await new Promise(resolve => setTimeout(resolve, 1000));
+              // 액션 실행 후 UI 변화를 기다리는 시간 증가
+              // tap은 1초, swipe는 2초, long_press는 3초 정도로 차등 적용
+              const waitTime = actName === 'tap' ? 1000 : 
+                              actName === 'swipe' ? 2000 : 3000;
+              
+              setLoadingMessage(`Waiting for UI changes after ${actName}...`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
             }
           } catch (error) {
             console.error('Error executing action:', error);
@@ -410,13 +416,12 @@ const App = () => {
           }
         }
 
-        // Set delay for 1 seconds
-        setLoadingMessage('Thinking about what to do in the next step...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
+        // 추가 안정화 대기 시간
+        setLoadingMessage('Stabilizing view before capture...');
+        await new Promise(resolve => setTimeout(resolve, 500));
 
         setLoadingMessage(`Round ${round}: Reflecting result...`);
-        const afterScreenshot: ScreenshotInfo = await requestScreenshot(`${round}_after`)
+        const afterScreenshot: ScreenshotInfo = await requestScreenshot(`${round}_after`);
 
         // create reflection frame 
         parent.postMessage({
