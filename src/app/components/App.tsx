@@ -396,8 +396,8 @@ const App = () => {
                   bbox: elem.bbox,
                   screenshotArea: data.screenshotArea,
                   ...(actName === 'swipe' && {
-                    direction: rest[0]?.toLowerCase(),
-                    distance: rest[1] || 'medium'
+                    direction: rest[0]?.replace(/['"]/g, '')?.toLowerCase() || 'left',
+                    distance: rest[1]?.replace(/['"]/g, '') || 'medium'
                   })
                 }
               }));
@@ -604,6 +604,7 @@ const App = () => {
               }
             }
           }, '*');
+          round++;  // Increment round even on error to prevent re-capturing same round
         }
       }
 
